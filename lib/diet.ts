@@ -31,10 +31,10 @@ export async function saveDietPlan(userId: string, plan: DietPlan, profileSnapsh
             diet_plan_id: dietPlanData.id,
             name: meal.name,
             description: `Receita de ${meal.type} do plano ${plan.name}`,
-            prep_time: meal.cooking_time,
+            cooking_time: meal.cooking_time, // Use cooking_time instead of prep_time
             ingredients: meal.ingredients.map(i => ({ name: i, quantity: '1', unit: 'porção' })), // Simplified for now
             instructions: meal.instructions,
-            nutrition: {
+            macros: { // Use macros instead of nutrition
                 calories: meal.calories,
                 protein: meal.macros.protein,
                 carbs: meal.macros.carbs,
@@ -43,7 +43,6 @@ export async function saveDietPlan(userId: string, plan: DietPlan, profileSnapsh
             meal_type: meal.type,
             day_of_week: meal.day,
             is_diet_plan: true,
-            cooking_time: meal.cooking_time,
             difficulty: meal.difficulty
         }));
 
@@ -90,11 +89,11 @@ export async function getActiveDietPlan(userId: string) {
                 day: r.day_of_week,
                 type: r.meal_type,
                 name: r.name,
-                calories: r.nutrition.calories,
+                calories: r.macros?.calories || 0,
                 macros: {
-                    protein: r.nutrition.protein,
-                    carbs: r.nutrition.carbs,
-                    fat: r.nutrition.fat
+                    protein: r.macros?.protein || 0,
+                    carbs: r.macros?.carbs || 0,
+                    fat: r.macros?.fat || 0
                 },
                 ingredients: r.ingredients.map((i: any) => i.name), // Simplified
                 instructions: r.instructions,

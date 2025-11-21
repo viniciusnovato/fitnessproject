@@ -135,10 +135,16 @@
 #### ✅ Geração de Receitas e Planos
 - **Arquivo:** [`app/(tabs)/recipes.tsx`](file:///Users/insitutoareluna/Documents/fit-pantry/app/(tabs)/recipes.tsx)
 - **Funcionalidades:**
-  - Geração de plano semanal com IA
-  - Cache de respostas para economia
-  - Persistência no Supabase
-  - Visualização semanal e detalhada
+  - Geração de plano semanal com IA (OpenAI GPT-4o)
+  - Cache inteligente com persistência no Supabase
+  - **Novas Funcionalidades:**
+    - Overlay de carregamento "tecnológico" com animação
+    - Botão de "Reset" para gerar novos planos (bypass de cache)
+    - Receitas adaptadas ao contexto brasileiro (simples e baratas)
+  - **Correções:**
+    - Fix de RLS para salvar planos
+    - Fix de constraint única no cache
+    - Aumento de tokens para evitar cortes na resposta JSON
 
 ---
 
@@ -225,10 +231,11 @@ fit-pantry/
 
 ## 🎯 Próximos Passos Imediatos
 
-1. **Integrar IA para receitas**
-   - Configurar API (OpenAI ou Gemini)
-   - Criar prompt para geração de receitas
-   - Implementar tela de receitas
+1. **Integrar IA para receitas** ✅
+   - Configurar API (OpenAI ou Gemini) ✅
+   - Criar prompt para geração de receitas ✅
+   - Implementar tela de receitas ✅
+   - Sistema de cache e persistência ✅
 
 2. **Implementar captura por foto**
    - Adicionar permissão de câmera

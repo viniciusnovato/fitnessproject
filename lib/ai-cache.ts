@@ -180,15 +180,19 @@ export async function withCache<T>(
     requestType: string,
     requestParams: any,
     fetchFn: () => Promise<T>,
-    ttl?: number | null
+    fetchFn: () => Promise<T>,
+    ttl?: number | null,
+    forceRefresh: boolean = false
 ): Promise<CachedResponse<T>> {
-    // Tenta buscar do cache
-    const cached = await getCachedResponse<T>(cacheKey, userId);
-    if (cached) {
-        return cached;
+    // Tenta buscar do cache se não for forçado
+    if (!forceRefresh) {
+        const cached = await getCachedResponse<T>(cacheKey, userId);
+        if (cached) {
+            return cached;
+        }
     }
 
-    // Cache miss - executa a função
+    // Cache miss ou force refresh - executa a função
     const data = await fetchFn();
 
     // Armazena no cache

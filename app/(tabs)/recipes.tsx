@@ -5,8 +5,8 @@ import { WeeklyView } from '@/components/diet/WeeklyView';
 import { getActiveDietPlan, saveDietPlan } from '@/lib/diet';
 import { DietPlan, generatePersonalizedDiet } from '@/lib/openai';
 import { supabase } from '@/lib/supabase';
-import { useFocusEffect } from '@expo/router';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -48,14 +48,26 @@ export default function DietScreen() {
         }
     };
 
-    const handleGenerateDiet = async () => {
-        if (!userProfile) return;
+    const handleGenerateDiet = async (forceRefresh = false) => {
+        console.log('handleGenerateDiet called', { forceRefresh });
+        console.log('UserProfile:', userProfile ? 'Loaded' : 'Missing');
 
+        if (!userProfile) {
+            console.log('Aborting: No user profile');
+            Alert.alert('Erro', 'Perfil de usuário não carregado. Tente recarregar a tela.');
+            return;
+        }
+
+        console.log('Setting loading to true');
         setLoading(true);
         try {
             const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
+            if (!user) {
+                console.log('Aborting: No auth user');
+                return;
+            }
 
+            console.log('Calling generatePersonalizedDiet...');
             const plan = await generatePersonalizedDiet({
                 userId: user.id,
                 profile: {
@@ -69,19 +81,23 @@ export default function DietScreen() {
                     budgetLevel: userProfile.budget || 'moderate',
                     trainingFrequency: userProfile.activity_level || 'moderate'
                 },
-                durationDays: 7
+                durationDays: 7,
+                forceRefresh
             });
+            console.log('Diet plan generated successfully');
 
             setDietPlan(plan);
             setCurrentDay(1);
 
             // Save to database
             await saveDietPlan(user.id, plan, userProfile);
+            console.log('Diet plan saved');
 
         } catch (error) {
+            console.error('Error in handleGenerateDiet:', error);
             Alert.alert('Erro', 'Falha ao gerar plano de dieta. Tente novamente.');
-            console.error(error);
         } finally {
+            console.log('Setting loading to false');
             setLoading(false);
         }
     };
@@ -108,6 +124,21 @@ export default function DietScreen() {
         } catch (error) {
             Alert.alert('Erro', 'Falha ao registrar refeição.');
         }
+    };
+
+    const handleResetPlan = () => {
+        Alert.alert(
+            'Novo Plano',
+            'Deseja gerar um novo plano alimentar? O plano atual será substituído.',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Sim, Gerar Novo',
+                    style: 'destructive',
+                    onPress: () => handleGenerateDiet(true)
+                }
+            ]
+        );
     };
 
     const currentMeals = dietPlan?.meals.filter(m => m.day === currentDay) || [];
@@ -172,6 +203,16 @@ export default function DietScreen() {
                                 }}
                             />
                         ))}
+
+                        <View style={styles.footerActions}>
+                            <TouchableOpacity
+                                style={styles.resetButton}
+                                onPress={handleResetPlan}
+                            >
+                                <Ionicons name="refresh-circle" size={24} color="#16a34a" />
+                                <Text style={styles.resetButtonText}>Gerar Novo Plano</Text>
+                            </TouchableOpacity>
+                        </View>
                     </>
                 )}
             </ScrollView>
@@ -424,5 +465,26 @@ const styles = StyleSheet.create({
         color: 'white',
         fontWeight: 'bold',
         fontSize: 18,
+    },
+    footerActions: {
+        marginTop: 24,
+        marginBottom: 40,
+        alignItems: 'center',
+    },
+    resetButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#dcfce7',
+        paddingVertical: 12,
+        paddingHorizontal: 24,
+        borderRadius: 24,
+        borderWidth: 1,
+        borderColor: '#bbf7d0',
+    },
+    resetButtonText: {
+        color: '#15803d',
+        fontWeight: 'bold',
+        fontSize: 16,
+        marginLeft: 8,
     },
 });

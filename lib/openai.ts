@@ -128,6 +128,7 @@ interface OpenAIRequest {
     messages: OpenAIMessage[];
     temperature?: number;
     max_tokens?: number;
+    response_format?: { type: 'text' | 'json_object' };
 }
 
 interface OpenAIResponse {
@@ -157,6 +158,7 @@ export async function callOpenAI(request: OpenAIRequest): Promise<string> {
             messages: request.messages,
             temperature: request.temperature ?? 0.7,
             max_tokens: request.max_tokens ?? 1000,
+            response_format: request.response_format,
         }),
     });
 
@@ -556,6 +558,7 @@ export async function generatePersonalizedDiet(params: {
         trainingFrequency: string;
     };
     durationDays: number;
+    forceRefresh?: boolean;
 }): Promise<DietPlan> {
     // Generate cache key
     const cacheKey = await generateCacheKey('diet_plan', {
@@ -600,12 +603,12 @@ FORMATO DE SAÍDA (JSON):
         {
             "day": 1,
             "type": "breakfast",
-            "name": "Nome da Receita",
+            "name": "Ovos Mexidos com Pão",
             "calories": 500,
             "macros": { "protein": 30, "carbs": 40, "fat": 20 },
-            "ingredients": ["ingrediente 1", "ingrediente 2"],
-            "instructions": ["passo 1", "passo 2"],
-            "cooking_time": 15,
+            "ingredients": ["2 ovos", "1 pão francês", "manteiga"],
+            "instructions": ["Frite os ovos", "Coma com pão"],
+            "cooking_time": 10,
             "difficulty": "easy"
         }
     ]
@@ -615,9 +618,18 @@ FORMATO DE SAÍDA (JSON):
                 model: "gpt-4o",
                 messages: [
                     { role: "system", content: systemPrompt },
-                    { role: "user", content: "Gere o plano de dieta completo agora." }
+                    {
+                        role: "user", content: `Gere o plano de dieta de ${params.durationDays} dias.
+IMPORTANTE:
+1. Use ingredientes TÍPICOS DO BRASIL e baratos (Arroz, Feijão, Frango, Ovos, Batata, Banana, Aveia, Pão Francês).
+2. Evite ingredientes caros ou difíceis de achar (Quinoa, Tacos, Aspargos, Salmão, Mirtilos).
+3. Receitas SIMPLES e RÁPIDAS.
+4. Gere TODOS os ${params.durationDays} dias.
+5. Seja conciso nas instruções para economizar tokens.` }
                 ],
                 temperature: 0.7,
+                max_tokens: 4000, // Increased to prevent truncation
+                response_format: { type: "json_object" }
             });
 
             try {
@@ -628,11 +640,14 @@ FORMATO DE SAÍDA (JSON):
                 return JSON.parse(response);
             } catch (error) {
                 console.error('Erro ao parsear plano de dieta:', error);
+                console.log('Raw response:', response); // Log raw response for debugging
                 throw new Error('Erro ao processar plano de dieta');
             }
         },
-        CACHE_TTL.DIET_PLAN
+        },
+CACHE_TTL.DIET_PLAN,
+    params.forceRefresh
     );
 
-    return result.data;
+return result.data;
 }
