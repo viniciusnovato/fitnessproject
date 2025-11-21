@@ -9,8 +9,8 @@
 | Autenticação | 70% | 🟡 Em andamento |
 | Dashboard | 65% | 🟡 Em andamento |
 | Ingredientes | 60% | 🟡 Em andamento |
-| Receitas | 0% | ⚪ Não iniciado |
-| Plano Alimentar | 0% | ⚪ Não iniciado |
+| Receitas | 100% | ✅ Concluído |
+| Plano Alimentar | 100% | ✅ Concluído |
 | Lista de Compras | 0% | ⚪ Não iniciado |
 
 ---
@@ -129,6 +129,16 @@
 #### ✅ Roteamento
 - Todas as rotas adicionadas ao `_layout.tsx`
 - Navegação pós-login corrigida para `/(tabs)/home`
+
+### 5. Sistema de Dieta Personalizada (Novo)
+
+#### ✅ Geração de Receitas e Planos
+- **Arquivo:** [`app/(tabs)/recipes.tsx`](file:///Users/insitutoareluna/Documents/fit-pantry/app/(tabs)/recipes.tsx)
+- **Funcionalidades:**
+  - Geração de plano semanal com IA
+  - Cache de respostas para economia
+  - Persistência no Supabase
+  - Visualização semanal e detalhada
 
 ---
 

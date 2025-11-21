@@ -21,7 +21,7 @@ export interface CachedResponse<T = any> {
  * Gera uma chave de cache consistente baseada no tipo e parâmetros
  */
 export async function generateCacheKey(
-    type: string,
+    type: string, // 'recipe' | 'insight' | 'meal_image' | 'meal_plan' | 'diet_plan'
     params: any
 ): Promise<string> {
     // Normaliza os parâmetros para garantir consistência
@@ -102,7 +102,7 @@ export async function setCachedResponse(
     requestType: string,
     requestParams: any,
     responseData: any,
-    ttl?: number // TTL em segundos
+    ttl?: number | null // TTL em segundos
 ): Promise<void> {
     try {
         const expiresAt = ttl
@@ -180,7 +180,7 @@ export async function withCache<T>(
     requestType: string,
     requestParams: any,
     fetchFn: () => Promise<T>,
-    ttl?: number
+    ttl?: number | null
 ): Promise<CachedResponse<T>> {
     // Tenta buscar do cache
     const cached = await getCachedResponse<T>(cacheKey, userId);

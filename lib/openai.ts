@@ -3,7 +3,7 @@
  * Funções para integração com a API do OpenAI
  */
 
-
+import { generateCacheKey, withCache } from './ai-cache';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.EXPO_PUBLIC_OPENAI_API_KEY;
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 
@@ -13,6 +13,7 @@ const CACHE_TTL = {
     INSIGHT: 7 * 24 * 60 * 60, // 7 days
     MEAL_IMAGE: null, // Permanent (no expiration)
     MEAL_PLAN: 30 * 24 * 60 * 60, // 30 days
+    DIET_PLAN: 30 * 24 * 60 * 60, // 30 days
     PANTRY_IMAGE: null, // Permanent
 };
 
@@ -524,4 +525,114 @@ Liste APENAS os ingredientes comestíveis visíveis. Ignorar embalagens não ali
         console.error('Erro ao parsear ingredientes da foto:', error);
         return [];
     }
+}
+export interface DietPlan {
+    name: string;
+    duration_days: number;
+    meals: {
+        day: number;
+        type: 'breakfast' | 'lunch' | 'dinner' | 'snack';
+        name: string;
+        calories: number;
+        macros: { protein: number; carbs: number; fat: number };
+        ingredients: string[];
+        instructions: string[];
+        cooking_time: number;
+        difficulty: 'easy' | 'medium' | 'hard';
+    }[];
+}
+
+export async function generatePersonalizedDiet(params: {
+    userId: string;
+    profile: {
+        goal: string;
+        targetCalories: number;
+        cookingTime: number;
+        availableEquipment: string[];
+        dietaryRestrictions: string[];
+        allergies: string[];
+        flavorPreferences: string[];
+        budgetLevel: string;
+        trainingFrequency: string;
+    };
+    durationDays: number;
+}): Promise<DietPlan> {
+    // Generate cache key
+    const cacheKey = await generateCacheKey('diet_plan', {
+        profile: params.profile,
+        durationDays: params.durationDays
+    });
+
+    // Use cache wrapper
+    const result = await withCache(
+        cacheKey,
+        params.userId,
+        'diet_plan',
+        params,
+        async () => {
+            const systemPrompt = `Você é um nutricionista de elite especializado em criar planos alimentares altamente personalizados.
+Crie um plano de dieta de ${params.durationDays} dias baseado EXATAMENTE no perfil do usuário.
+
+PERFIL DO USUÁRIO:
+- Objetivo: ${params.profile.goal}
+- Calorias Diárias: ${params.profile.targetCalories}
+- Tempo para Cozinhar: ${params.profile.cookingTime} minutos
+- Equipamentos: ${params.profile.availableEquipment.join(', ')}
+- Restrições: ${params.profile.dietaryRestrictions.join(', ') || 'Nenhuma'}
+- Alergias: ${params.profile.allergies.join(', ') || 'Nenhuma'}
+- Preferências de Sabor: ${params.profile.flavorPreferences.join(', ')}
+- Orçamento: ${params.profile.budgetLevel}
+- Treino: ${params.profile.trainingFrequency}
+
+REGRAS CRÍTICAS:
+1. Gere 3-4 refeições por dia (café, almoço, jantar, lanche opcional).
+2. TODAS as receitas devem ser preparáveis em até ${params.profile.cookingTime} minutos.
+3. Use APENAS os equipamentos listados.
+4. RESPEITE RIGOROSAMENTE alergias e restrições.
+5. O orçamento deve guiar a escolha dos ingredientes.
+6. Retorne APENAS JSON válido.
+
+FORMATO DE SAÍDA (JSON):
+{
+    "name": "Nome Criativo do Plano",
+    "duration_days": ${params.durationDays},
+    "meals": [
+        {
+            "day": 1,
+            "type": "breakfast",
+            "name": "Nome da Receita",
+            "calories": 500,
+            "macros": { "protein": 30, "carbs": 40, "fat": 20 },
+            "ingredients": ["ingrediente 1", "ingrediente 2"],
+            "instructions": ["passo 1", "passo 2"],
+            "cooking_time": 15,
+            "difficulty": "easy"
+        }
+    ]
+}`;
+
+            const response = await callOpenAI({
+                model: "gpt-4o",
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: "Gere o plano de dieta completo agora." }
+                ],
+                temperature: 0.7,
+            });
+
+            try {
+                const jsonMatch = response.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    return JSON.parse(jsonMatch[0]);
+                }
+                return JSON.parse(response);
+            } catch (error) {
+                console.error('Erro ao parsear plano de dieta:', error);
+                throw new Error('Erro ao processar plano de dieta');
+            }
+        },
+        CACHE_TTL.DIET_PLAN
+    );
+
+    return result.data;
 }

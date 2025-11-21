@@ -1,123 +1,88 @@
-import { analyzePantryImage, generateRecipes } from '@/lib/openai';
+
+import { DietPlanCard } from '@/components/diet/DietPlanCard';
+import { RecipeCard } from '@/components/diet/RecipeCard';
+import { WeeklyView } from '@/components/diet/WeeklyView';
+import { getActiveDietPlan, saveDietPlan } from '@/lib/diet';
+import { DietPlan, generatePersonalizedDiet } from '@/lib/openai';
 import { supabase } from '@/lib/supabase';
+import { useFocusEffect } from '@expo/router';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-export default function RecipesScreen() {
-    const [pantryItems, setPantryItems] = useState<any[]>([]);
-    const [selectedItems, setSelectedItems] = useState<string[]>([]);
-    const [extraIngredients, setExtraIngredients] = useState('');
+export default function DietScreen() {
     const [loading, setLoading] = useState(false);
-    const [recipes, setRecipes] = useState<any[]>([]);
+    const [dietPlan, setDietPlan] = useState<DietPlan | null>(null);
+    const [currentDay, setCurrentDay] = useState(1);
     const [showRecipeModal, setShowRecipeModal] = useState(false);
     const [selectedRecipe, setSelectedRecipe] = useState<any>(null);
-    const [analyzingPhoto, setAnalyzingPhoto] = useState(false);
+    const [userProfile, setUserProfile] = useState<any>(null);
 
-    useEffect(() => {
-        loadPantryItems();
-    }, []);
+    useFocusEffect(
+        useCallback(() => {
+            loadUserProfile();
+        }, [])
+    );
 
-    const loadPantryItems = async () => {
+    const loadUserProfile = async () => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
         const { data } = await supabase
-            .from('pantry_items')
+            .from('profiles')
             .select('*')
-            .eq('user_id', user.id)
-            .eq('status', 'available');
+            .eq('id', user.id)
+            .single();
 
-        if (data) setPantryItems(data);
-    };
-
-    const toggleItem = (name: string) => {
-        if (selectedItems.includes(name)) {
-            setSelectedItems(selectedItems.filter(i => i !== name));
-        } else {
-            setSelectedItems([...selectedItems, name]);
+        if (data) {
+            setUserProfile(data);
+            checkActiveDietPlan(user.id);
         }
     };
 
-    const handleGenerate = async () => {
-        const allIngredients = [
-            ...selectedItems,
-            ...extraIngredients.split(',').map(i => i.trim()).filter(i => i)
-        ];
-
-        if (allIngredients.length === 0) {
-            Alert.alert('Erro', 'Selecione ou digite pelo menos um ingrediente');
-            return;
+    const checkActiveDietPlan = async (userId: string) => {
+        const activePlan = await getActiveDietPlan(userId);
+        if (activePlan) {
+            setDietPlan(activePlan as DietPlan);
         }
+    };
+
+    const handleGenerateDiet = async () => {
+        if (!userProfile) return;
 
         setLoading(true);
         try {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
-            // Get profile for goals
-            const { data: profile } = await supabase
-                .from('profiles')
-                .select('*')
-                .eq('id', user.id)
-                .single();
-
-            const result = await generateRecipes({
-                ingredients: allIngredients,
-                goal: profile.goal,
-                targetCalories: profile.daily_calories || 2000,
-                macros: {
-                    protein: 30, // Default split if not calculated
-                    carbs: 40,
-                    fat: 30
+            const plan = await generatePersonalizedDiet({
+                userId: user.id,
+                profile: {
+                    goal: userProfile.goal,
+                    targetCalories: userProfile.daily_calories || 2000,
+                    cookingTime: userProfile.cooking_time || 30,
+                    availableEquipment: userProfile.equipment || [],
+                    dietaryRestrictions: userProfile.dietary_restrictions || [],
+                    allergies: userProfile.allergies || [],
+                    flavorPreferences: userProfile.flavor_preferences || [],
+                    budgetLevel: userProfile.budget || 'moderate',
+                    trainingFrequency: userProfile.activity_level || 'moderate'
                 },
-                dietaryRestrictions: profile.dietary_restrictions,
-                allergies: profile.allergies,
-                userId: user.id // Required for caching
+                durationDays: 7
             });
 
-            if (result) {
-                setRecipes(Array.isArray(result) ? result : [result]);
-            }
+            setDietPlan(plan);
+            setCurrentDay(1);
+
+            // Save to database
+            await saveDietPlan(user.id, plan, userProfile);
+
         } catch (error) {
-            Alert.alert('Erro', 'Falha ao gerar receitas. Tente novamente.');
+            Alert.alert('Erro', 'Falha ao gerar plano de dieta. Tente novamente.');
             console.error(error);
         } finally {
             setLoading(false);
-        }
-    };
-
-    const pickPantryPhoto = async () => {
-        const { status } = await ImagePicker.requestCameraPermissionsAsync();
-        if (status !== 'granted') {
-            Alert.alert('Permissão necessária', 'Precisamos da câmera para ver sua despensa.');
-            return;
-        }
-
-        const result = await ImagePicker.launchCameraAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.5,
-            base64: true,
-        });
-
-        if (!result.canceled && result.assets[0].base64) {
-            setAnalyzingPhoto(true);
-            try {
-                const ingredients = await analyzePantryImage(result.assets[0].base64);
-                if (ingredients.length > 0) {
-                    const currentExtra = extraIngredients ? extraIngredients + ', ' : '';
-                    setExtraIngredients(currentExtra + ingredients.join(', '));
-                    Alert.alert('Sucesso', `Identificamos: ${ingredients.join(', ')}`);
-                } else {
-                    Alert.alert('Ops', 'Não identifiquei ingredientes claros na foto.');
-                }
-            } catch (error) {
-                Alert.alert('Erro', 'Falha na análise da imagem.');
-            } finally {
-                setAnalyzingPhoto(false);
-            }
         }
     };
 
@@ -129,10 +94,10 @@ export default function RecipesScreen() {
             const { error } = await supabase.from('meals_log').insert({
                 user_id: user.id,
                 name: recipe.name,
-                calories: recipe.nutrition.calories,
-                protein: recipe.nutrition.protein,
-                carbs: recipe.nutrition.carbs,
-                fat: recipe.nutrition.fat,
+                calories: recipe.calories,
+                protein: recipe.macros.protein,
+                carbs: recipe.macros.carbs,
+                fat: recipe.macros.fat,
                 is_generated: true
             });
 
@@ -145,100 +110,69 @@ export default function RecipesScreen() {
         }
     };
 
+    const currentMeals = dietPlan?.meals.filter(m => m.day === currentDay) || [];
+
     return (
         <SafeAreaView style={styles.container}>
             <ScrollView contentContainerStyle={styles.scrollContent}>
-                <Text style={styles.title}>Gerador de Receitas 👨‍🍳</Text>
-                <Text style={styles.subtitle}>O que você tem na despensa hoje?</Text>
-
-                {/* Pantry Selection */}
-                <View style={styles.card}>
-                    <Text style={styles.cardTitle}>Sua Despensa:</Text>
-                    <View style={styles.pantryList}>
-                        {pantryItems.map(item => (
-                            <TouchableOpacity
-                                key={item.id}
-                                onPress={() => toggleItem(item.name)}
-                                style={[
-                                    styles.pantryItem,
-                                    selectedItems.includes(item.name) && styles.pantryItemActive
-                                ]}
-                            >
-                                <Text style={[
-                                    styles.pantryItemText,
-                                    selectedItems.includes(item.name) && styles.pantryItemTextActive
-                                ]}>
-                                    {item.name}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
+                <View style={styles.header}>
+                    <Text style={styles.title}>Seu Plano Alimentar 🥗</Text>
+                    <Text style={styles.subtitle}>Personalizado para seus objetivos</Text>
                 </View>
 
-                {/* Extra Ingredients & Photo */}
-                <View style={styles.card}>
-                    <Text style={styles.cardTitle}>Outros Ingredientes:</Text>
-                    <View style={styles.inputRow}>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Ex: tomate, cebola, frango..."
-                            value={extraIngredients}
-                            onChangeText={setExtraIngredients}
-                        />
+                {!dietPlan ? (
+                    <View style={styles.emptyState}>
+                        <Ionicons name="nutrition-outline" size={64} color="#cbd5e1" />
+                        <Text style={styles.emptyStateText}>
+                            Você ainda não tem um plano ativo.
+                            Que tal criar um agora?
+                        </Text>
                         <TouchableOpacity
-                            onPress={pickPantryPhoto}
-                            disabled={analyzingPhoto}
-                            style={styles.cameraButton}
+                            onPress={handleGenerateDiet}
+                            disabled={loading}
+                            style={styles.generateButton}
                         >
-                            {analyzingPhoto ? (
-                                <ActivityIndicator color="#2563eb" />
+                            {loading ? (
+                                <ActivityIndicator color="white" />
                             ) : (
-                                <Ionicons name="camera" size={24} color="#2563eb" />
+                                <Text style={styles.generateButtonText}>Gerar Plano Semanal ✨</Text>
                             )}
                         </TouchableOpacity>
                     </View>
-                </View>
+                ) : (
+                    <>
+                        <DietPlanCard
+                            planName={dietPlan.name}
+                            duration={dietPlan.duration_days}
+                            calories={userProfile?.daily_calories || 2000}
+                            goal={userProfile?.goal || 'health'}
+                            onRegenerate={handleGenerateDiet}
+                        />
 
-                <TouchableOpacity
-                    onPress={handleGenerate}
-                    disabled={loading}
-                    style={styles.generateButton}
-                >
-                    {loading ? (
-                        <ActivityIndicator color="white" />
-                    ) : (
-                        <Text style={styles.generateButtonText}>Gerar Receitas Mágicas ✨</Text>
-                    )}
-                </TouchableOpacity>
+                        <WeeklyView
+                            days={dietPlan.duration_days}
+                            currentDay={currentDay}
+                            onDaySelect={setCurrentDay}
+                        />
 
-                {/* Results */}
-                {recipes.length > 0 && (
-                    <View style={styles.resultsContainer}>
-                        <Text style={styles.sectionTitle}>Sugestões para você:</Text>
-                        {recipes.map((recipe, index) => (
-                            <TouchableOpacity
+                        <Text style={styles.sectionTitle}>Refeições do Dia {currentDay}</Text>
+
+                        {currentMeals.map((meal, index) => (
+                            <RecipeCard
                                 key={index}
+                                type={meal.type}
+                                name={meal.name}
+                                calories={meal.calories}
+                                macros={meal.macros}
+                                cookingTime={meal.cooking_time}
+                                difficulty={meal.difficulty}
                                 onPress={() => {
-                                    setSelectedRecipe(recipe);
+                                    setSelectedRecipe(meal);
                                     setShowRecipeModal(true);
                                 }}
-                                style={styles.recipeCard}
-                            >
-                                <View style={styles.recipeHeader}>
-                                    <Text style={styles.recipeName}>{recipe.name}</Text>
-                                    <View style={styles.timeBadge}>
-                                        <Text style={styles.timeText}>{recipe.prepTime} min</Text>
-                                    </View>
-                                </View>
-                                <Text style={styles.recipeDescription} numberOfLines={2}>{recipe.description}</Text>
-                                <View style={styles.macrosRow}>
-                                    <Text style={styles.macroText}>🔥 {recipe.nutrition.calories} kcal</Text>
-                                    <Text style={styles.macroText}>🥩 {recipe.nutrition.protein}g P</Text>
-                                    <Text style={styles.macroText}>🍞 {recipe.nutrition.carbs}g C</Text>
-                                </View>
-                            </TouchableOpacity>
+                            />
                         ))}
-                    </View>
+                    </>
                 )}
             </ScrollView>
 
@@ -258,30 +192,30 @@ export default function RecipesScreen() {
                                 {/* Macros Card */}
                                 <View style={styles.macrosCard}>
                                     <View style={styles.macroItem}>
-                                        <Text style={styles.macroValue}>{selectedRecipe.nutrition.calories}</Text>
+                                        <Text style={styles.macroValue}>{selectedRecipe.calories}</Text>
                                         <Text style={styles.macroLabel}>Calorias</Text>
                                     </View>
                                     <View style={styles.macroDivider} />
                                     <View style={styles.macroItem}>
-                                        <Text style={styles.macroValue}>{selectedRecipe.nutrition.protein}g</Text>
+                                        <Text style={styles.macroValue}>{selectedRecipe.macros.protein}g</Text>
                                         <Text style={styles.macroLabel}>Prot</Text>
                                     </View>
                                     <View style={styles.macroDivider} />
                                     <View style={styles.macroItem}>
-                                        <Text style={styles.macroValue}>{selectedRecipe.nutrition.carbs}g</Text>
+                                        <Text style={styles.macroValue}>{selectedRecipe.macros.carbs}g</Text>
                                         <Text style={styles.macroLabel}>Carb</Text>
                                     </View>
                                     <View style={styles.macroDivider} />
                                     <View style={styles.macroItem}>
-                                        <Text style={styles.macroValue}>{selectedRecipe.nutrition.fat}g</Text>
+                                        <Text style={styles.macroValue}>{selectedRecipe.macros.fat}g</Text>
                                         <Text style={styles.macroLabel}>Gord</Text>
                                     </View>
                                 </View>
 
                                 <Text style={styles.sectionSubtitle}>Ingredientes</Text>
                                 <View style={styles.ingredientsList}>
-                                    {selectedRecipe.ingredients.map((ing: any, i: number) => (
-                                        <Text key={i} style={styles.ingredientText}>• {ing.quantity} {ing.unit} {ing.name}</Text>
+                                    {selectedRecipe.ingredients.map((ing: string, i: number) => (
+                                        <Text key={i} style={styles.ingredientText}>• {ing}</Text>
                                     ))}
                                 </View>
 
@@ -323,157 +257,58 @@ const styles = StyleSheet.create({
     scrollContent: {
         padding: 24,
     },
+    header: {
+        marginBottom: 24,
+    },
     title: {
-        fontSize: 24,
+        fontSize: 28,
         fontWeight: 'bold',
         color: '#0f172a',
-        marginBottom: 8,
+        marginBottom: 4,
     },
     subtitle: {
         fontSize: 16,
         color: '#64748b',
-        marginBottom: 24,
     },
-    card: {
-        backgroundColor: 'white',
-        borderRadius: 16,
-        padding: 16,
-        marginBottom: 24,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-        elevation: 2,
-    },
-    cardTitle: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: '#334155',
-        marginBottom: 12,
-    },
-    pantryList: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-    },
-    pantryItem: {
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: '#e2e8f0',
-        backgroundColor: '#f8fafc',
-    },
-    pantryItemActive: {
-        backgroundColor: '#dcfce7',
-        borderColor: '#22c55e',
-    },
-    pantryItemText: {
-        color: '#475569',
-        fontSize: 14,
-    },
-    pantryItemTextActive: {
-        color: '#15803d',
-        fontWeight: 'bold',
-    },
-    inputRow: {
-        flexDirection: 'row',
-        gap: 8,
-    },
-    input: {
-        flex: 1,
-        backgroundColor: '#f8fafc',
-        borderWidth: 1,
-        borderColor: '#e2e8f0',
-        borderRadius: 12,
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        fontSize: 16,
-    },
-    cameraButton: {
-        backgroundColor: '#dbeafe',
-        width: 48,
-        height: 48,
-        borderRadius: 12,
+    emptyState: {
         alignItems: 'center',
         justifyContent: 'center',
+        padding: 40,
+        backgroundColor: 'white',
+        borderRadius: 24,
+        marginTop: 20,
+    },
+    emptyStateText: {
+        textAlign: 'center',
+        color: '#64748b',
+        fontSize: 16,
+        marginTop: 16,
+        marginBottom: 24,
+        lineHeight: 24,
     },
     generateButton: {
         backgroundColor: '#16a34a',
         paddingVertical: 16,
-        borderRadius: 12,
+        paddingHorizontal: 32,
+        borderRadius: 16,
         alignItems: 'center',
         shadowColor: '#16a34a',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.2,
         shadowRadius: 8,
         elevation: 4,
-        marginBottom: 32,
+        width: '100%',
     },
     generateButtonText: {
         color: 'white',
         fontSize: 18,
         fontWeight: 'bold',
     },
-    resultsContainer: {
-        marginBottom: 40,
-    },
     sectionTitle: {
         fontSize: 20,
         fontWeight: 'bold',
         color: '#0f172a',
         marginBottom: 16,
-    },
-    recipeCard: {
-        backgroundColor: 'white',
-        borderRadius: 16,
-        padding: 16,
-        marginBottom: 16,
-        borderWidth: 1,
-        borderColor: '#f1f5f9',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-        elevation: 2,
-    },
-    recipeHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        marginBottom: 8,
-    },
-    recipeName: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#1e293b',
-        flex: 1,
-        marginRight: 8,
-    },
-    timeBadge: {
-        backgroundColor: '#dcfce7',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 8,
-    },
-    timeText: {
-        color: '#15803d',
-        fontSize: 12,
-        fontWeight: 'bold',
-    },
-    recipeDescription: {
-        color: '#64748b',
-        marginBottom: 12,
-        fontSize: 14,
-        lineHeight: 20,
-    },
-    macrosRow: {
-        flexDirection: 'row',
-        gap: 12,
-    },
-    macroText: {
-        fontSize: 12,
-        color: '#94a3b8',
     },
     modalContainer: {
         flex: 1,
