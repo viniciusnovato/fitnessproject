@@ -1,10 +1,10 @@
-import { View, Text, ScrollView, TouchableOpacity, Image, Alert, Modal, TextInput, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
-import * as ImagePicker from 'expo-image-picker';
-import { Ionicons } from '@expo/vector-icons';
 import { analyzeMealImage } from '@/lib/openai';
+import { supabase } from '@/lib/supabase';
+import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function TrackerScreen() {
     const [meals, setMeals] = useState<any[]>([]);
@@ -62,7 +62,10 @@ export default function TrackerScreen() {
     const analyzeImage = async (base64: string) => {
         setAnalyzing(true);
         try {
-            const analysis = await analyzeMealImage(base64);
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+
+            const analysis = await analyzeMealImage(base64, user.id);
             if (analysis && !analysis.error) {
                 setScannedMeal(analysis);
                 setShowModal(true);

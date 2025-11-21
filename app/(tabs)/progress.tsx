@@ -1,12 +1,12 @@
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, Alert, Platform, Modal, Dimensions } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { useState, useEffect } from 'react';
+import { generateInsights } from '@/lib/openai';
 import { supabase } from '@/lib/supabase';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { Alert, Dimensions, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text as SvgText } from 'react-native-svg';
-import { generateInsights } from '@/lib/openai';
 
 interface WeightEntry {
     id: string;
@@ -48,11 +48,19 @@ export default function ProgressScreen() {
 
     const fetchInsights = async () => {
         setLoadingInsights(true);
-        const result = await generateInsights(profile, weightHistory);
-        if (result) {
-            setInsights(result);
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+
+            const result = await generateInsights(profile, weightHistory, user.id);
+            if (result) {
+                setInsights(result);
+            }
+        } catch (error) {
+            console.error('Error fetching insights:', error);
+        } finally {
+            setLoadingInsights(false);
         }
-        setLoadingInsights(false);
     };
 
     const router = useRouter();

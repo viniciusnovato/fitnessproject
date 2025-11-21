@@ -1,10 +1,10 @@
-import { View, Text, ScrollView, TouchableOpacity, TextInput, Alert, Modal, ActivityIndicator, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useState, useEffect } from 'react';
+import { analyzePantryImage, generateRecipes } from '@/lib/openai';
 import { supabase } from '@/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { generateRecipes, analyzePantryImage } from '@/lib/openai';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function RecipesScreen() {
     const [pantryItems, setPantryItems] = useState<any[]>([]);
@@ -74,7 +74,8 @@ export default function RecipesScreen() {
                     fat: 30
                 },
                 dietaryRestrictions: profile.dietary_restrictions,
-                allergies: profile.allergies
+                allergies: profile.allergies,
+                userId: user.id // Required for caching
             });
 
             if (result) {
