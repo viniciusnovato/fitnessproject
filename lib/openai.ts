@@ -118,6 +118,42 @@ Sempre retorne um JSON válido.`;
     return result.data;
 }
 
+/**
+ * Retry a function with exponential backoff
+ */
+async function retryWithBackoff<T>(
+    fn: () => Promise<T>,
+    maxRetries: number = 3,
+    initialDelay: number = 1000
+): Promise<T> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (error: any) {
+            lastError = error;
+
+            // Don't retry on certain errors
+            if (error.message?.includes('JSON Parse') || error.message?.includes('Invalid')) {
+                throw error;
+            }
+
+            // If it's the last attempt, throw
+            if (attempt === maxRetries - 1) {
+                throw error;
+            }
+
+            // Wait with exponential backoff
+            const delay = initialDelay * Math.pow(2, attempt);
+            console.log(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+
+    throw lastError || new Error('Max retries exceeded');
+}
+
 interface OpenAIMessage {
     role: 'system' | 'user' | 'assistant';
     content: string;
@@ -144,31 +180,61 @@ interface OpenAIResponse {
  */
 export async function callOpenAI(request: OpenAIRequest): Promise<string> {
     if (!OPENAI_API_KEY) {
-        throw new Error('OPENAI_API_KEY não configurada no .env');
+        throw new Error('OpenAI API key not configured');
     }
 
-    const response = await fetch(OPENAI_API_URL, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-            model: request.model || 'gpt-4o-mini',
-            messages: request.messages,
-            temperature: request.temperature ?? 0.7,
-            max_tokens: request.max_tokens ?? 1000,
-            response_format: request.response_format,
-        }),
-    });
+    try {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+                model: request.model || 'gpt-4o-mini',
+                messages: request.messages,
+                temperature: request.temperature ?? 0.7,
+                max_tokens: request.max_tokens ?? 2000,
+                ...(request.response_format && { response_format: request.response_format }),
+            }),
+        });
 
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(`OpenAI API Error: ${error.error?.message || 'Unknown error'}`);
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('OpenAI API error:', response.status, errorText);
+
+            if (response.status === 429) {
+                throw new Error('Rate limit exceeded. Please try again in a moment.');
+            } else if (response.status === 401) {
+                throw new Error('Invalid API key');
+            } else if (response.status >= 500) {
+                throw new Error('OpenAI service temporarily unavailable');
+            }
+
+            throw new Error(`OpenAI API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+            throw new Error('Invalid response format from OpenAI');
+        }
+
+        const content = data.choices[0].message.content;
+
+        // Check if response is HTML (error page)
+        if (content.trim().startsWith('<')) {
+            console.error('Received HTML instead of JSON:', content.substring(0, 200));
+            throw new Error('Received invalid response format (HTML)');
+        }
+
+        return content;
+    } catch (error: any) {
+        if (error.message?.includes('Network request failed')) {
+            throw new Error('Network error. Please check your internet connection.');
+        }
+        throw error;
     }
-
-    const data: OpenAIResponse = await response.json();
-    return data.choices[0]?.message?.content || '';
 }
 
 /**
@@ -573,7 +639,7 @@ export async function generatePersonalizedDiet(params: {
         'diet_plan',
         params,
         async () => {
-            const systemPrompt = `Você é um nutricionista de elite especializado em criar planos alimentares altamente personalizados.
+            const systemPrompt = `Você é um nutricionista de elite especializado em criar planos alimentares altamente personalizados para BRASILEIROS.
 Crie um plano de dieta de ${params.durationDays} dias baseado EXATAMENTE no perfil do usuário.
 
 PERFIL DO USUÁRIO:
@@ -587,13 +653,52 @@ PERFIL DO USUÁRIO:
 - Orçamento: ${params.profile.budgetLevel}
 - Treino: ${params.profile.trainingFrequency}
 
+🇧🇷 INGREDIENTES BRASILEIROS OBRIGATÓRIOS (usar em 80%+ das receitas):
+PROTEÍNAS BASE: Frango (peito, coxa), Ovo, Carne Moída, Peixe (Tilápia, Sardinha), Linguiça
+${params.profile.budgetLevel === 'high' || params.profile.budgetLevel === 'moderate' ? 'PROTEÍNAS PREMIUM (permitidas): Salmão, Atum fresco, Camarão, Picanha' : ''}
+CARBOIDRATOS: Arroz Branco/Integral, Feijão (preto, carioca), Batata, Batata Doce, Macarrão, Pão Francês, Aveia, Tapioca
+VEGETAIS: Tomate, Alface, Cenoura, Cebola, Alho, Brócolis, Couve, Abobrinha, Chuchu, Abóbora
+FRUTAS: Banana, Maçã, Laranja, Mamão, Melancia, Abacaxi, Manga${params.profile.budgetLevel === 'high' ? ', Abacate, Frutas Vermelhas' : ''}
+LATICÍNIOS: Leite, Iogurte Natural, Queijo Minas, Requeijão
+OUTROS: Azeite, Óleo, Manteiga, Sal, Temperos básicos
+
+❌ INGREDIENTES PROIBIDOS (NÃO USAR):
+- Quinoa, Aspargos, Kale, Couve de Bruxelas (não são comuns no Brasil)
+- Tacos, Tortillas, Wraps (não é cultura brasileira)
+- Ingredientes exóticos ou muito difíceis de encontrar
+${params.profile.budgetLevel === 'low' ? '- Salmão, Atum fresco, Camarão, Abacate, Nozes importadas (muito caros para orçamento baixo)' : ''}
+
 REGRAS CRÍTICAS:
-1. Gere 3-4 refeições por dia (café, almoço, jantar, lanche opcional).
-2. TODAS as receitas devem ser preparáveis em até ${params.profile.cookingTime} minutos.
-3. Use APENAS os equipamentos listados.
-4. RESPEITE RIGOROSAMENTE alergias e restrições.
-5. O orçamento deve guiar a escolha dos ingredientes.
-6. Retorne APENAS JSON válido.
+1. Gere EXATAMENTE 4 refeições por dia: Café da Manhã (breakfast), Almoço (lunch), Lanche Tarde (snack), Jantar (dinner).
+2. ORDEM DAS REFEIÇÕES: Café da Manhã → Almoço → Lanche Tarde (snack) → Jantar
+3. O LANCHE TARDE deve ser ENTRE almoço e jantar (15h-17h).
+4. TODAS as receitas devem ser preparáveis em até ${params.profile.cookingTime} minutos.
+5. Use APENAS os equipamentos listados.
+6. RESPEITE RIGOROSAMENTE alergias e restrições ${params.profile.dietaryRestrictions.join(', ') || 'Nenhuma'}, ${params.profile.allergies.join(', ') || 'Nenhuma'}.
+7. O orçamento deve guiar a escolha dos ingredientes ${params.profile.budgetLevel}.
+8. Receitas SIMPLES e PRÁTICAS do dia a dia brasileiro.
+9. Retorne APENAS JSON válido.
+
+🎯 DISTRIBUIÇÃO CALÓRICA OBRIGATÓRIA (total: ${params.profile.targetCalories} kcal/dia):
+- Café da Manhã: ${Math.round(params.profile.targetCalories * 0.25)} kcal (25%)
+- Almoço: ${Math.round(params.profile.targetCalories * 0.40)} kcal (40%)
+- Lanche Tarde: ${Math.round(params.profile.targetCalories * 0.15)} kcal (15%)
+- Jantar: ${Math.round(params.profile.targetCalories * 0.20)} kcal (20%)
+
+📊 MACROS BASEADOS NO OBJETIVO "${params.profile.goal}":
+${params.profile.goal === 'gain_muscle' ? `
+- Proteína: 2g por kg de peso (prioridade ALTA)
+- Carboidratos: Moderado a alto (energia para treino)
+- Gorduras: Moderado (20-30% das calorias)
+` : params.profile.goal === 'lose_weight' ? `
+- Proteína: 1.8g por kg de peso (preservar massa muscular)
+- Carboidratos: Moderado (controle de calorias)
+- Gorduras: Baixo a moderado (20-25% das calorias)
+` : `
+- Proteína: 1.5g por kg de peso
+- Carboidratos: Moderado
+- Gorduras: Moderado (25-30% das calorias)
+`}
 
 FORMATO DE SAÍDA (JSON):
 {
@@ -603,51 +708,455 @@ FORMATO DE SAÍDA (JSON):
         {
             "day": 1,
             "type": "breakfast",
-            "name": "Ovos Mexidos com Pão",
+            "name": "Ovos Mexidos com Pão Francês",
             "calories": 500,
             "macros": { "protein": 30, "carbs": 40, "fat": 20 },
-            "ingredients": ["2 ovos", "1 pão francês", "manteiga"],
-            "instructions": ["Frite os ovos", "Coma com pão"],
+            "ingredients": ["2 ovos", "1 pão francês", "1 col manteiga"],
+            "instructions": ["Bata os ovos", "Frite na manteiga", "Sirva com pão"],
             "cooking_time": 10,
             "difficulty": "easy"
         }
     ]
 }`;
 
-            const response = await callOpenAI({
-                model: "gpt-4o",
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    {
-                        role: "user", content: `Gere o plano de dieta de ${params.durationDays} dias.
+            const response = await retryWithBackoff(async () => {
+                return await callOpenAI({
+                    model: "gpt-4o",
+                    messages: [
+                        { role: "system", content: systemPrompt },
+                        {
+                            role: "user", content: `Gere o plano de dieta de ${params.durationDays} dias.
 IMPORTANTE:
-1. Use ingredientes TÍPICOS DO BRASIL e baratos (Arroz, Feijão, Frango, Ovos, Batata, Banana, Aveia, Pão Francês).
-2. Evite ingredientes caros ou difíceis de achar (Quinoa, Tacos, Aspargos, Salmão, Mirtilos).
-3. Receitas SIMPLES e RÁPIDAS.
-4. Gere TODOS os ${params.durationDays} dias.
-5. Seja conciso nas instruções para economizar tokens.` }
-                ],
-                temperature: 0.7,
-                max_tokens: 4000, // Increased to prevent truncation
-                response_format: { type: "json_object" }
-            });
+1. GERE 4 REFEIÇÕES POR DIA: Café da Manhã (breakfast), Almoço (lunch), Lanche Tarde (snack), Jantar (dinner).
+2. O LANCHE TARDE é OBRIGATÓRIO e deve ser ENTRE almoço e jantar (15h-17h).
+3. As calorias das refeições DEVEM SOMAR EXATAMENTE ${params.profile.targetCalories} kcal/dia.
+4. Use a distribuição: Café ${Math.round(params.profile.targetCalories * 0.25)}kcal, Almoço ${Math.round(params.profile.targetCalories * 0.40)}kcal, Lanche Tarde ${Math.round(params.profile.targetCalories * 0.15)}kcal, Jantar ${Math.round(params.profile.targetCalories * 0.20)}kcal.
+5. Use ingredientes TÍPICOS DO BRASIL e baratos (Arroz, Feijão, Frango, Ovos, Batata, Banana, Aveia, Pão Francês).
+6. Evite ingredientes caros ou difíceis de achar (Quinoa, Tacos, Aspargos, Salmão, Mirtilos).
+7. Receitas SIMPLES e RÁPIDAS.
+8. Gere TODOS os ${params.durationDays} dias.
+9. Seja conciso nas instruções para economizar tokens.` }
+                    ],
+                    temperature: 0.7,
+                    max_tokens: 8000,
+                    response_format: { type: "json_object" }
+                });
+            }, 3, 2000); // 3 retries, starting with 2 second delay
 
             try {
-                const jsonMatch = response.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                    return JSON.parse(jsonMatch[0]);
+                console.log('Raw AI response length:', response.length);
+                console.log('First 200 chars:', response.substring(0, 200));
+                console.log('Last 200 chars:', response.substring(response.length - 200));
+
+                // Try to parse directly first
+                let parsed;
+                try {
+                    parsed = JSON.parse(response);
+                } catch (directParseError) {
+                    // If direct parse fails, try to extract JSON from response
+                    const jsonMatch = response.match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        console.log('Extracted JSON from response');
+                        parsed = JSON.parse(jsonMatch[0]);
+                    } else {
+                        throw new Error('No JSON found in response');
+                    }
                 }
-                return JSON.parse(response);
+
+                // Validate the parsed data
+                if (!parsed.meals || !Array.isArray(parsed.meals)) {
+                    throw new Error('Invalid diet plan structure: missing meals array');
+                }
+
+                console.log(`Successfully parsed diet plan with ${parsed.meals.length} meals`);
+                return parsed;
             } catch (error) {
                 console.error('Erro ao parsear plano de dieta:', error);
-                console.log('Raw response:', response); // Log raw response for debugging
+                console.error('Response preview:', response.substring(0, 500));
                 throw new Error('Erro ao processar plano de dieta');
             }
         },
-        },
-CACHE_TTL.DIET_PLAN,
-    params.forceRefresh
+        CACHE_TTL.DIET_PLAN,
+        params.forceRefresh
     );
 
-return result.data;
+    return result.data;
+}
+
+/**
+ * Gera uma receita alternativa similar (para botão "Trocar")
+ */
+export async function generateAlternativeRecipe(params: {
+    userId: string;
+    originalRecipe: {
+        type: 'breakfast' | 'lunch' | 'dinner' | 'snack';
+        calories: number;
+        macros: { protein: number; carbs: number; fat: number };
+        cooking_time: number;
+    };
+    profile: {
+        goal: string;
+        cookingTime: number;
+        availableEquipment: string[];
+        dietaryRestrictions: string[];
+        allergies: string[];
+        budgetLevel: string;
+    };
+    swapReason?: string; // Optional reason for swapping
+}): Promise<any> {
+    const systemPrompt = `Você é um nutricionista brasileiro expert.
+Gere UMA receita alternativa para ${params.originalRecipe.type === 'breakfast' ? 'café da manhã' : params.originalRecipe.type === 'lunch' ? 'almoço' : params.originalRecipe.type === 'dinner' ? 'jantar' : 'lanche'}.
+
+PERFIL DO USUÁRIO:
+- Objetivo: ${params.profile.goal}
+- Tempo de Cozinha: ${params.profile.cookingTime} minutos
+- Equipamentos: ${params.profile.availableEquipment.join(', ')}
+- Restrições: ${params.profile.dietaryRestrictions.join(', ') || 'Nenhuma'}
+- Alergias: ${params.profile.allergies.join(', ') || 'Nenhuma'}
+- Orçamento: ${params.profile.budgetLevel}
+
+${params.swapReason ? `MOTIVO DA TROCA: "${params.swapReason}"
+IMPORTANTE: NÃO use os ingredientes mencionados pelo usuário. Gere uma receita SEM esses ingredientes.
+` : ''}
+INGREDIENTES BRASILEIROS (priorize):
+PROTEÍNAS: Frango, Ovos, Carne Moída, Peixe branco${params.profile.budgetLevel !== 'low' ? ', Salmão, Camarão' : ''}
+CARBOIDRATOS: Arroz, Feijão, Batata, Pão Francês, Tapioca, Aveia, Macarrão
+VEGETAIS: Tomate, Alface, Cenoura, Brócolis, Couve, Abobrinha
+FRUTAS: Banana, Maçã, Laranja, Mamão, Melancia${params.profile.budgetLevel === 'high' ? ', Abacate' : ''}
+
+REGRAS:
+1. Macros devem ser SIMILARES (±10% de variação)
+2. Receita DIFERENTE da original
+3. Tempo de preparo ≤ ${params.profile.cookingTime} minutos
+4. Ingredientes BRASILEIROS e acessíveis
+5. Retorne APENAS JSON válido
+
+FORMATO:
+{
+    "name": "Nome da Receita",
+    "type": "${params.originalRecipe.type}",
+    "calories": ${params.originalRecipe.calories},
+    "macros": { "protein": ${params.originalRecipe.macros.protein}, "carbs": ${params.originalRecipe.macros.carbs}, "fat": ${params.originalRecipe.macros.fat} },
+    "ingredients": ["ingrediente 1", "ingrediente 2"],
+    "instructions": ["passo 1", "passo 2"],
+    "cooking_time": ${params.originalRecipe.cooking_time},
+    "difficulty": "easy"
+}`;
+
+    const response = await retryWithBackoff(async () => {
+        return await callOpenAI({
+            model: "gpt-4o-mini",
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: "Gere UMA receita alternativa brasileira com macros similares." }
+            ],
+            temperature: 0.8,
+            max_tokens: 1000,
+            response_format: { type: "json_object" }
+        });
+    }, 3, 1000); // 3 retries, starting with 1 second delay
+
+    try {
+        const jsonMatch = response.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            return JSON.parse(jsonMatch[0]);
+        }
+        return JSON.parse(response);
+    } catch (error) {
+        console.error('Erro ao parsear receita alternativa:', error);
+        throw new Error('Erro ao gerar receita alternativa');
+    }
+}
+
+export interface IngredientParsed {
+    name: string;
+    quantity: string | null;
+    unit: string | null;
+    category: string;
+}
+
+/**
+ * Normaliza e corrige lista de ingredientes (texto manual)
+ */
+export async function normalizeIngredients(text: string): Promise<IngredientParsed[]> {
+    const systemPrompt = `
+    Você é um assistente culinário especialista em identificar ingredientes.
+    Sua tarefa é analisar o texto do usuário e extrair uma lista de ingredientes.
+    
+    REGRAS CRÍTICAS:
+    1. Retorne APENAS um JSON válido.
+    2. O JSON deve ser um array de objetos com a estrutura: { "ingredients": [{ "name": string, "quantity": string | null, "unit": string | null, "category": string }] }.
+    3. As categorias permitidas são: "Proteína", "Carboidrato", "Vegetal", "Fruta", "Laticínio", "Tempero", "Outros".
+    4. PADRONIZAÇÃO DE NOMES (MUITO IMPORTANTE):
+       - Use SEMPRE o SINGULAR (ex: "Tomate" e não "Tomates", "Ovo" e não "Ovos").
+       - Use nomes genéricos simples (ex: "Arroz" e não "Arroz Tio João", "Leite" e não "Caixa de leite").
+       - Primeira letra maiúscula.
+    5. Se a quantidade não for especificada, use null.
+    6. Se a unidade não for especificada, use null.
+    `;
+
+    try {
+        const response = await retryWithBackoff(async () => {
+            return await callOpenAI({
+                model: "gpt-4o-mini",
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: `Analise e extraia ingredientes: "${text}"` }
+                ],
+                temperature: 0.3,
+                max_tokens: 1000,
+                response_format: { type: "json_object" }
+            });
+        }, 3, 1000);
+
+        const parsed = JSON.parse(response);
+        if (parsed.ingredients && Array.isArray(parsed.ingredients)) {
+            return parsed.ingredients.map((i: any) => ({
+                name: i.name || '',
+                quantity: i.quantity || null,
+                unit: i.unit || null,
+                category: i.category || 'Outros'
+            }));
+        }
+
+        return [];
+    } catch (error) {
+        console.error('Erro ao normalizar ingredientes:', error);
+        // Fallback simples
+        return text.split(/[,\n]/).map(i => ({
+            name: i.trim(),
+            quantity: null,
+            unit: null,
+            category: 'Outros'
+        })).filter(i => i.name.length > 0);
+    }
+}
+
+/**
+ * Reconhece ingredientes de uma imagem usando GPT-4 Vision
+ */
+export async function recognizeIngredientsFromImage(params: {
+    userId: string;
+    imageBase64: string;
+}): Promise<IngredientParsed[]> {
+    const systemPrompt = `Você é um nutricionista expert. Analise a imagem e liste os ingredientes alimentares visíveis.
+    Ignore itens não comestíveis.
+    
+    REGRAS CRÍTICAS:
+    1. Para cada item, estime a categoria (Proteína, Carbo, Vegetal, Fruta, Laticínio, Tempero, Outros).
+    2. PADRONIZAÇÃO DE NOMES (IMPORTANTE):
+       - Use SEMPRE o SINGULAR (ex: "Banana" e não "Bananas").
+       - Use nomes genéricos (ex: "Maçã" e não "Maçã Fuji").
+    3. Se possível, estime quantidade visual grosseira, senão deixe null.
+    
+    Retorne APENAS JSON:
+    {
+      "ingredients": [
+        { "name": "Banana", "quantity": "6", "unit": "un", "category": "Fruta" }
+      ]
+    }`;
+
+    try {
+        const response = await retryWithBackoff(async () => {
+            // OPENAI_API_KEY is assumed to be available in the scope or passed via process.env
+            // The original code had a check, but the instruction removed it.
+            // Assuming OPENAI_API_KEY is defined globally or via process.env.EXPO_PUBLIC_OPENAI_API_KEY
+            const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY; // Ensure this is correctly sourced
+
+            if (!OPENAI_API_KEY) throw new Error('API key not configured for image recognition');
+
+            const res = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                },
+                body: JSON.stringify({
+                    model: "gpt-4o",
+                    messages: [
+                        {
+                            role: "user",
+                            content: [
+                                { type: "text", text: systemPrompt },
+                                {
+                                    type: "image_url",
+                                    image_url: {
+                                        url: `data:image/jpeg;base64,${params.imageBase64}`,
+                                        detail: "low"
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    max_tokens: 500,
+                    response_format: { type: "json_object" }
+                }),
+            });
+
+            if (!res.ok) {
+                const errorData = await res.json();
+                throw new Error(`API error: ${res.status} - ${JSON.stringify(errorData)}`);
+            }
+            const data = await res.json();
+            return data.choices[0].message.content;
+        }, 3, 2000);
+
+        const parsed = JSON.parse(response);
+        if (parsed.ingredients && Array.isArray(parsed.ingredients)) {
+            return parsed.ingredients;
+        }
+        return [];
+    } catch (error) {
+        console.error('Erro no reconhecimento de imagem:', error);
+        throw error;
+    }
+}
+
+/**
+ * Transcreve áudio e extrai ingredientes
+ */
+export async function transcribeAudioToIngredients(params: {
+    userId: string;
+    audioUri: string;
+}): Promise<IngredientParsed[]> {
+    try {
+        // First, transcribe audio using Whisper
+        const formData = new FormData();
+        formData.append('file', {
+            uri: params.audioUri,
+            name: 'audio.m4a',
+            type: 'audio/m4a'
+        } as any);
+        formData.append('model', 'whisper-1');
+        formData.append('language', 'pt');
+
+        // Assuming OPENAI_API_KEY is defined globally or via process.env.EXPO_PUBLIC_OPENAI_API_KEY
+        const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY; // Ensure this is correctly sourced
+        if (!OPENAI_API_KEY) throw new Error('API key not configured for audio transcription');
+
+        const transcriptionResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                // 'Content-Type': 'multipart/form-data' is automatically set by fetch when using FormData
+            },
+            body: formData
+        });
+
+        if (!transcriptionResponse.ok) {
+            const errorData = await transcriptionResponse.json();
+            throw new Error(`Erro ao transcrever áudio: ${transcriptionResponse.status} - ${JSON.stringify(errorData)}`);
+        }
+
+        const { text } = await transcriptionResponse.json();
+
+        // Now extract ingredients from transcription
+        const systemPrompt = `Você é um assistente que extrai ingredientes de texto em português.
+Analise o texto e extraia TODOS os ingredientes mencionados.
+
+REGRAS:
+1. Ignore quantidades, foque apenas nos ingredientes
+2. Use nomes padronizados em português brasileiro
+3. Retorne um objeto JSON com array "ingredients"
+4. Se não encontrar ingredientes, retorne array vazio
+
+FORMATO DE SAÍDA:
+{ "ingredients": ["ingrediente1", "ingrediente2"] }`;
+
+        const response = await retryWithBackoff(async () => {
+            return await callOpenAI({
+                model: "gpt-4o-mini",
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: `Extraia os ingredientes deste texto: "${text}"` }
+                ],
+                temperature: 0.3,
+                max_tokens: 300,
+                response_format: { type: "json_object" }
+            });
+        }, 3, 1000);
+
+        const parsed = JSON.parse(response);
+        // Mapear para IngredientParsed
+        if (parsed.ingredients && Array.isArray(parsed.ingredients)) {
+            return await normalizeIngredients(parsed.ingredients.join(', '));
+        }
+        return [];
+    } catch (error) {
+        console.error('Erro ao processar áudio:', error);
+        throw new Error('Erro ao processar áudio');
+    }
+}
+
+/**
+ * Gera receita brasileira com base nos ingredientes disponíveis
+ */
+export async function generateRecipeFromIngredients(params: {
+    userId: string;
+    ingredients: string[];
+    profile: {
+        goal: string;
+        cookingTime: number;
+        availableEquipment: string[];
+        dietaryRestrictions: string[];
+        allergies: string[];
+    };
+}): Promise<any> {
+    const systemPrompt = `Você é um chef brasileiro criando receitas com ingredientes disponíveis.
+Crie UMA receita deliciosa e saudável usando APENAS os ingredientes listados.
+
+PERFIL DO USUÁRIO:
+- Objetivo: ${params.profile.goal}
+- Tempo máximo: ${params.profile.cookingTime} minutos
+- Equipamentos: ${params.profile.availableEquipment.join(', ')}
+- Restrições: ${params.profile.dietaryRestrictions.join(', ') || 'Nenhuma'}
+- Alergias: ${params.profile.allergies.join(', ') || 'Nenhuma'}
+
+INGREDIENTES DISPONÍVEIS:
+${params.ingredients.map(ing => `- ${ing}`).join('\n')}
+
+REGRAS CRÍTICAS:
+1. Use APENAS os ingredientes listados acima
+2. Receita SIMPLES e PRÁTICA do dia a dia brasileiro
+3. Tempo de preparo ≤ ${params.profile.cookingTime} minutos
+4. Respeite restrições e alergias
+5. Calcule calorias e macros aproximados
+6. Retorne APENAS JSON válido
+
+FORMATO DE SAÍDA:
+{
+  "name": "Nome da Receita",
+  "type": "lunch",
+  "calories": 500,
+  "macros": { "protein": 30, "carbs": 50, "fat": 15 },
+  "ingredients": ["2 ovos", "1 tomate", "sal a gosto"],
+  "instructions": ["Passo 1", "Passo 2", "Passo 3"],
+  "cooking_time": 15,
+  "difficulty": "easy",
+  "servings": 1
+}`;
+
+    try {
+        const response = await retryWithBackoff(async () => {
+            return await callOpenAI({
+                model: "gpt-4o",
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: "Crie uma receita brasileira com os ingredientes disponíveis." }
+                ],
+                temperature: 0.8,
+                max_tokens: 1500,
+                response_format: { type: "json_object" }
+            });
+        }, 3, 2000);
+
+        const jsonMatch = response.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            return JSON.parse(jsonMatch[0]);
+        }
+        return JSON.parse(response);
+    } catch (error) {
+        console.error('Erro ao gerar receita:', error);
+        throw new Error('Erro ao gerar receita');
+    }
 }

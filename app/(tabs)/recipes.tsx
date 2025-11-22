@@ -3,27 +3,95 @@ import { DietPlanCard } from '@/components/diet/DietPlanCard';
 import { RecipeCard } from '@/components/diet/RecipeCard';
 import { WeeklyView } from '@/components/diet/WeeklyView';
 import { getActiveDietPlan, saveDietPlan } from '@/lib/diet';
-import { DietPlan, generatePersonalizedDiet } from '@/lib/openai';
+import { DietPlan, generateAlternativeRecipe, generatePersonalizedDiet } from '@/lib/openai';
 import { supabase } from '@/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Animated, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+const AI_LOADING_MESSAGES = [
+    '🤖 IA analisando suas preferências...',
+    '📊 Calculando macros personalizados...',
+    '🍳 Selecionando receitas brasileiras...',
+    '⚖️ Balanceando nutrientes...',
+    '✨ Finalizando seu plano semanal...'
+];
 
 export default function DietScreen() {
     const [loading, setLoading] = useState(false);
+    const [loadingMessage, setLoadingMessage] = useState(AI_LOADING_MESSAGES[0]);
+    const [loadingProgress, setLoadingProgress] = useState(0);
+    const [swappingRecipeIndex, setSwappingRecipeIndex] = useState<number | null>(null);
+    const [showSwapModal, setShowSwapModal] = useState(false);
+    const [swapReason, setSwapReason] = useState('');
+    const [recipeToSwap, setRecipeToSwap] = useState<{ meal: any, index: number } | null>(null);
     const [dietPlan, setDietPlan] = useState<DietPlan | null>(null);
     const [currentDay, setCurrentDay] = useState(1);
     const [showRecipeModal, setShowRecipeModal] = useState(false);
     const [selectedRecipe, setSelectedRecipe] = useState<any>(null);
     const [userProfile, setUserProfile] = useState<any>(null);
+    const pulseAnim = useState(new Animated.Value(1))[0];
 
     useFocusEffect(
         useCallback(() => {
             loadUserProfile();
         }, [])
     );
+
+    // Rotate loading messages and simulate progress
+    useEffect(() => {
+        if (!loading) {
+            setLoadingProgress(0);
+            return;
+        }
+
+        let messageIndex = 0;
+        let progress = 0;
+
+        // Rotate messages every 2 seconds
+        const messageInterval = setInterval(() => {
+            messageIndex = (messageIndex + 1) % AI_LOADING_MESSAGES.length;
+            setLoadingMessage(AI_LOADING_MESSAGES[messageIndex]);
+        }, 2000);
+
+        // Linear progress: 1% every 200ms = 20 seconds to reach 100%
+        const progressInterval = setInterval(() => {
+            progress += 1;
+            if (progress <= 100) {
+                setLoadingProgress(progress);
+            }
+        }, 200);
+
+        return () => {
+            clearInterval(messageInterval);
+            clearInterval(progressInterval);
+        };
+    }, [loading]);
+
+    // Pulse animation for AI icon
+    useEffect(() => {
+        if (!loading) return;
+
+        const pulse = Animated.loop(
+            Animated.sequence([
+                Animated.timing(pulseAnim, {
+                    toValue: 1.2,
+                    duration: 1000,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(pulseAnim, {
+                    toValue: 1,
+                    duration: 1000,
+                    useNativeDriver: true,
+                }),
+            ])
+        );
+        pulse.start();
+
+        return () => pulse.stop();
+    }, [loading, pulseAnim]);
 
     const loadUserProfile = async () => {
         const { data: { user } } = await supabase.auth.getUser();
@@ -60,6 +128,7 @@ export default function DietScreen() {
 
         console.log('Setting loading to true');
         setLoading(true);
+        setLoadingProgress(0);
         try {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) {
@@ -85,6 +154,10 @@ export default function DietScreen() {
                 forceRefresh
             });
             console.log('Diet plan generated successfully');
+
+            // Complete progress to 100%
+            setLoadingProgress(100);
+            await new Promise(resolve => setTimeout(resolve, 300)); // Brief pause at 100%
 
             setDietPlan(plan);
             setCurrentDay(1);
@@ -141,7 +214,83 @@ export default function DietScreen() {
         );
     };
 
-    const currentMeals = dietPlan?.meals.filter(m => m.day === currentDay) || [];
+    const handleSwapRecipe = async (mealIndex: number) => {
+        if (!dietPlan || !userProfile) return;
+
+        const meal = currentMeals[mealIndex];
+
+        // Show modal to ask for reason
+        setRecipeToSwap({ meal, index: mealIndex });
+        setSwapReason('');
+        setShowSwapModal(true);
+    };
+
+    const confirmSwapRecipe = async () => {
+        if (!recipeToSwap || !dietPlan || !userProfile) return;
+
+        const { meal, index: mealIndex } = recipeToSwap;
+        setShowSwapModal(false);
+        setSwappingRecipeIndex(mealIndex); // Show loading on button
+
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+
+            // Generate alternative recipe with same type and reason
+            const alternativeRecipe = await generateAlternativeRecipe({
+                userId: user.id,
+                originalRecipe: {
+                    type: meal.type, // Preserve meal type (breakfast, lunch, dinner, snack)
+                    calories: meal.calories,
+                    macros: meal.macros,
+                    cooking_time: meal.cooking_time,
+                },
+                profile: {
+                    goal: userProfile.goal,
+                    cookingTime: userProfile.cooking_time || 30,
+                    availableEquipment: userProfile.equipment || [],
+                    dietaryRestrictions: userProfile.dietary_restrictions || [],
+                    allergies: userProfile.allergies || [],
+                    budgetLevel: userProfile.budget || 'moderate',
+                },
+                swapReason: swapReason.trim() || undefined, // Pass user's reason
+            });
+
+            // Update diet plan - replace the specific meal
+            const updatedMeals = dietPlan.meals.map((m) => {
+                // Match by day, type, and name to replace exact meal
+                if (m.day === currentDay && m.type === meal.type && m.name === meal.name) {
+                    return { ...alternativeRecipe, day: currentDay }; // Ensure day is preserved
+                }
+                return m;
+            });
+
+            const updatedPlan = { ...dietPlan, meals: updatedMeals };
+            setDietPlan(updatedPlan);
+
+            // Save updated plan
+            await saveDietPlan(user.id, updatedPlan, userProfile);
+
+            Alert.alert('✨ Receita Trocada!', `Nova receita: ${alternativeRecipe.name}`);
+        } catch (error) {
+            console.error('Error swapping recipe:', error);
+            Alert.alert('Erro', 'Falha ao trocar receita. Tente novamente.');
+        } finally {
+            setSwappingRecipeIndex(null);
+        }
+    };
+
+    // Order meals correctly: breakfast, snack_morning, lunch, snack (afternoon), dinner, snack_night
+    const mealOrder: Record<string, number> = {
+        breakfast: 1,
+        snack_morning: 2,
+        lunch: 3,
+        snack: 4,  // Lanche tarde (entre almoço e jantar)
+        dinner: 5,
+        snack_night: 6
+    };
+    const currentMeals = (dietPlan?.meals.filter(m => m.day === currentDay) || [])
+        .sort((a, b) => (mealOrder[a.type] || 99) - (mealOrder[b.type] || 99));
 
     return (
         <SafeAreaView style={styles.container}>
@@ -159,7 +308,7 @@ export default function DietScreen() {
                             Que tal criar um agora?
                         </Text>
                         <TouchableOpacity
-                            onPress={handleGenerateDiet}
+                            onPress={() => handleGenerateDiet()}
                             disabled={loading}
                             style={styles.generateButton}
                         >
@@ -186,36 +335,106 @@ export default function DietScreen() {
                             onDaySelect={setCurrentDay}
                         />
 
+                        {/* Botão Gerar Novo Plano - MOVIDO PARA CIMA */}
+                        <View style={styles.generateNewSection}>
+                            <TouchableOpacity
+                                style={styles.generateNewButton}
+                                onPress={() => handleResetPlan()}
+                                disabled={loading}
+                            >
+                                <Ionicons name="sparkles" size={20} color="#16a34a" />
+                                <Text style={styles.generateNewButtonText}>Gerar Novo Plano com IA</Text>
+                            </TouchableOpacity>
+                        </View>
+
                         <Text style={styles.sectionTitle}>Refeições do Dia {currentDay}</Text>
 
                         {currentMeals.map((meal, index) => (
                             <RecipeCard
-                                key={index}
+                                key={`${meal.type}-${index}`}
                                 type={meal.type}
-                                name={meal.name}
+                                name={swappingRecipeIndex === index ? '🔄 Trocando...' : meal.name}
                                 calories={meal.calories}
                                 macros={meal.macros}
                                 cookingTime={meal.cooking_time}
                                 difficulty={meal.difficulty}
                                 onPress={() => {
+                                    if (swappingRecipeIndex === index) return; // Prevent opening while swapping
                                     setSelectedRecipe(meal);
                                     setShowRecipeModal(true);
                                 }}
+                                onSwap={swappingRecipeIndex === index ? undefined : () => handleSwapRecipe(index)}
                             />
                         ))}
-
-                        <View style={styles.footerActions}>
-                            <TouchableOpacity
-                                style={styles.resetButton}
-                                onPress={handleResetPlan}
-                            >
-                                <Ionicons name="refresh-circle" size={24} color="#16a34a" />
-                                <Text style={styles.resetButtonText}>Gerar Novo Plano</Text>
-                            </TouchableOpacity>
-                        </View>
                     </>
                 )}
             </ScrollView>
+
+            {/* AI Loading Overlay */}
+            {loading && (
+                <View style={styles.loadingOverlay}>
+                    <View style={styles.loadingCard}>
+                        <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                            <Text style={styles.loadingIcon}>🤖</Text>
+                        </Animated.View>
+                        <Text style={styles.loadingTitle}>Gerando seu plano...</Text>
+                        <Text style={styles.loadingMessage}>{loadingMessage}</Text>
+
+                        {/* Progress Bar */}
+                        <View style={styles.progressContainer}>
+                            <View style={styles.progressBarBackground}>
+                                <View style={[styles.progressBarFill, { width: `${loadingProgress}%` }]} />
+                            </View>
+                            <Text style={styles.progressText}>{loadingProgress}%</Text>
+                        </View>
+                    </View>
+                </View>
+            )}
+
+            {/* Swap Reason Modal */}
+            <Modal visible={showSwapModal} animationType="slide" transparent>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.swapModalCard}>
+                        <Text style={styles.swapModalTitle}>Por que trocar?</Text>
+                        <Text style={styles.swapModalSubtitle}>
+                            Ex: "Não tenho aveia", "Não gosto de banana"
+                        </Text>
+
+                        <View style={styles.inputContainer}>
+                            <Ionicons name="create-outline" size={20} color="#6b7280" style={styles.inputIcon} />
+                            <TextInput
+                                style={styles.swapInput}
+                                placeholder="Digite o motivo (opcional)"
+                                value={swapReason}
+                                onChangeText={setSwapReason}
+                                multiline
+                                numberOfLines={3}
+                                autoFocus
+                            />
+                        </View>
+
+                        <View style={styles.swapModalButtons}>
+                            <TouchableOpacity
+                                style={styles.swapCancelButton}
+                                onPress={() => {
+                                    setShowSwapModal(false);
+                                    setRecipeToSwap(null);
+                                    setSwapReason('');
+                                }}
+                            >
+                                <Text style={styles.swapCancelText}>Cancelar</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.swapConfirmButton}
+                                onPress={confirmSwapRecipe}
+                            >
+                                <Ionicons name="swap-horizontal" size={20} color="white" />
+                                <Text style={styles.swapConfirmText}>Trocar</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
 
             {/* Recipe Detail Modal */}
             <Modal visible={showRecipeModal} animationType="slide" presentationStyle="pageSheet">
@@ -355,6 +574,12 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: 'white',
     },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
     modalScroll: {
         flex: 1,
     },
@@ -466,25 +691,168 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         fontSize: 18,
     },
-    footerActions: {
-        marginTop: 24,
-        marginBottom: 40,
+    generateNewSection: {
+        marginVertical: 16,
         alignItems: 'center',
     },
-    resetButton: {
+    generateNewButton: {
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: '#dcfce7',
-        paddingVertical: 12,
-        paddingHorizontal: 24,
-        borderRadius: 24,
-        borderWidth: 1,
-        borderColor: '#bbf7d0',
+        paddingVertical: 14,
+        paddingHorizontal: 28,
+        borderRadius: 16,
+        borderWidth: 2,
+        borderColor: '#16a34a',
+        shadowColor: '#16a34a',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+        elevation: 3,
     },
-    resetButtonText: {
+    generateNewButtonText: {
         color: '#15803d',
         fontWeight: 'bold',
         fontSize: 16,
         marginLeft: 8,
+    },
+    loadingOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.7)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000,
+    },
+    loadingCard: {
+        backgroundColor: 'white',
+        borderRadius: 24,
+        padding: 32,
+        alignItems: 'center',
+        maxWidth: 320,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 8,
+    },
+    loadingIcon: {
+        fontSize: 64,
+        marginBottom: 16,
+    },
+    loadingTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#0f172a',
+        marginBottom: 8,
+    },
+    loadingMessage: {
+        fontSize: 14,
+        color: '#64748b',
+        textAlign: 'center',
+        lineHeight: 20,
+    },
+    progressContainer: {
+        width: '100%',
+        marginTop: 24,
+        alignItems: 'center',
+    },
+    progressBarBackground: {
+        width: '100%',
+        height: 8,
+        backgroundColor: '#e2e8f0',
+        borderRadius: 4,
+        overflow: 'hidden',
+    },
+    progressBarFill: {
+        height: '100%',
+        backgroundColor: '#16a34a',
+        borderRadius: 4,
+    },
+    progressText: {
+        marginTop: 8,
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#16a34a',
+    },
+    swapModalCard: {
+        backgroundColor: 'white',
+        borderRadius: 24,
+        padding: 24,
+        width: '90%',
+        maxWidth: 400,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.15,
+        shadowRadius: 16,
+        elevation: 8,
+    },
+    swapModalTitle: {
+        fontSize: 22,
+        fontWeight: 'bold',
+        color: '#1f2937',
+        marginBottom: 8,
+        textAlign: 'center',
+    },
+    swapModalSubtitle: {
+        fontSize: 14,
+        color: '#6b7280',
+        marginBottom: 20,
+        textAlign: 'center',
+    },
+    inputContainer: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        backgroundColor: '#f9fafb',
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 20,
+        borderWidth: 1,
+        borderColor: '#e5e7eb',
+    },
+    inputIcon: {
+        marginRight: 8,
+        marginTop: 2,
+    },
+    swapInput: {
+        flex: 1,
+        fontSize: 16,
+        color: '#1f2937',
+        minHeight: 60,
+        textAlignVertical: 'top',
+    },
+    swapModalButtons: {
+        flexDirection: 'row',
+        gap: 12,
+    },
+    swapCancelButton: {
+        flex: 1,
+        padding: 16,
+        borderRadius: 12,
+        backgroundColor: '#f3f4f6',
+        alignItems: 'center',
+    },
+    swapCancelText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#6b7280',
+    },
+    swapConfirmButton: {
+        flex: 1,
+        padding: 16,
+        borderRadius: 12,
+        backgroundColor: '#16a34a',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+    },
+    swapConfirmText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: 'white',
     },
 });

@@ -1,9 +1,13 @@
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import { useState, useEffect } from 'react';
+import { getActiveDietPlan } from '@/lib/diet';
+import { calculateNutrition, parseActivityLevel, parseGoal, parseSex } from '@/lib/nutrition-calculator';
+import { analyzeMealImage } from '@/lib/openai';
 import { supabase } from '@/lib/supabase';
-import { calculateNutrition, parseSex, parseActivityLevel, parseGoal } from '@/lib/nutrition-calculator';
+import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function HomeScreen() {
   const [user, setUser] = useState<any>(null);
@@ -13,9 +17,31 @@ export default function HomeScreen() {
 
   const [weightHistory, setWeightHistory] = useState<any[]>([]);
 
+  // Meal Logging State
+  const [todaysMeals, setTodaysMeals] = useState<any[]>([]);
+  const [todaysMacros, setTodaysMacros] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+  // Camera/AI State
+  const [analyzing, setAnalyzing] = useState(false);
+  const [showCameraModal, setShowCameraModal] = useState(false);
+  const [scannedMeal, setScannedMeal] = useState<any>(null);
+
+  // Plan/Recipe State
+  const [showPlanModal, setShowPlanModal] = useState(false);
+  const [planRecipes, setPlanRecipes] = useState<any[]>([]);
+  const [loadingPlan, setLoadingPlan] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      checkUser();
+    }, [])
+  );
+
   useEffect(() => {
-    checkUser();
-  }, []);
+    if (user) {
+      loadTodaysMeals();
+    }
+  }, [user]);
 
   const checkUser = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -96,6 +122,125 @@ export default function HomeScreen() {
     return Math.min(Math.round(progress), 100);
   };
 
+  const loadTodaysMeals = async () => {
+    if (!user) return;
+
+    const today = new Date().toISOString().split('T')[0];
+
+    const { data, error } = await supabase
+      .from('meals_log')
+      .select('*')
+      .eq('user_id', user.id)
+      .gte('date', `${today}T00:00:00`)
+      .lte('date', `${today}T23:59:59`)
+      .order('date', { ascending: true });
+
+    if (data) {
+      setTodaysMeals(data);
+
+      // Calculate totals
+      const totals = data.reduce((acc, meal) => ({
+        calories: acc.calories + (meal.calories || 0),
+        protein: acc.protein + (meal.protein || 0),
+        carbs: acc.carbs + (meal.carbs || 0),
+        fat: acc.fat + (meal.fat || 0),
+      }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+      setTodaysMacros(totals);
+    }
+  };
+
+  const handleCameraCapture = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permissão necessária', 'Precisamos de acesso à câmera para analisar sua comida.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.5,
+      base64: true,
+    });
+
+    if (!result.canceled && result.assets[0].base64) {
+      analyzeImage(result.assets[0].base64);
+    }
+  };
+
+  const analyzeImage = async (base64: string) => {
+    setAnalyzing(true);
+    try {
+      const analysis = await analyzeMealImage(base64, user.id);
+      if (analysis && !analysis.error) {
+        setScannedMeal(analysis);
+        setShowCameraModal(true);
+      } else {
+        Alert.alert('Erro', 'Não foi possível identificar comida na imagem.');
+      }
+    } catch (error) {
+      Alert.alert('Erro', 'Falha na análise da imagem.');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const handlePlanSelection = async () => {
+    setLoadingPlan(true);
+    setShowPlanModal(true);
+    try {
+      const plan = await getActiveDietPlan(user.id);
+      if (plan) {
+        // Get today's day of week (1-7, Sunday is 1 in some systems but let's check logic)
+        // Assuming plan logic uses 1=Monday or similar. Let's just get all recipes for now or filter by day index if possible.
+        // For simplicity, showing all recipes in the plan to let user choose.
+        // Or better: filter by current day index if we knew when the plan started.
+        // Let's show all recipes from the plan grouped by day or just flat list.
+
+        // Plan structure is flat meals array with 'day' property
+        const allRecipes = plan.meals.map((meal: any) => ({
+          ...meal,
+          dayName: `Dia ${meal.day}`
+        }));
+
+        setPlanRecipes(allRecipes);
+      } else {
+        Alert.alert('Sem Plano', 'Você ainda não tem um plano alimentar ativo. Vá em Receitas para gerar um.');
+        setShowPlanModal(false);
+      }
+    } catch (error) {
+      Alert.alert('Erro', 'Falha ao carregar plano.');
+    } finally {
+      setLoadingPlan(false);
+    }
+  };
+
+  const saveMeal = async (mealData: any) => {
+    try {
+      const { error } = await supabase.from('meals_log').insert({
+        user_id: user.id,
+        name: mealData.name,
+        calories: mealData.calories,
+        protein: mealData.protein,
+        carbs: mealData.carbs,
+        fat: mealData.fat,
+        is_generated: true,
+        date: new Date().toISOString() // Current time
+      });
+
+      if (error) throw error;
+
+      Alert.alert('Sucesso', 'Refeição registrada!');
+      setShowCameraModal(false);
+      setShowPlanModal(false);
+      setScannedMeal(null);
+      loadTodaysMeals(); // Refresh data
+    } catch (error) {
+      Alert.alert('Erro', 'Falha ao salvar refeição.');
+    }
+  };
+
   const getStartingWeight = () => {
     if (weightHistory.length > 0) return weightHistory[0].weight;
     return profile?.weight || '—';
@@ -166,22 +311,22 @@ export default function HomeScreen() {
             <>
               <View style={styles.macrosGrid}>
                 <View style={styles.macroCard}>
-                  <Text style={styles.macroValue}>0</Text>
+                  <Text style={styles.macroValue}>{todaysMacros.calories}</Text>
                   <Text style={styles.macroLabel}>Calorias</Text>
                   <Text style={styles.macroTarget}>de {nutrition.targetCalories}</Text>
                 </View>
                 <View style={styles.macroCard}>
-                  <Text style={styles.macroValue}>0g</Text>
+                  <Text style={styles.macroValue}>{todaysMacros.protein}g</Text>
                   <Text style={styles.macroLabel}>Proteínas</Text>
                   <Text style={styles.macroTarget}>de {nutrition.macros.protein}g</Text>
                 </View>
                 <View style={styles.macroCard}>
-                  <Text style={styles.macroValue}>0g</Text>
+                  <Text style={styles.macroValue}>{todaysMacros.carbs}g</Text>
                   <Text style={styles.macroLabel}>Carbos</Text>
                   <Text style={styles.macroTarget}>de {nutrition.macros.carbs}g</Text>
                 </View>
                 <View style={styles.macroCard}>
-                  <Text style={styles.macroValue}>0g</Text>
+                  <Text style={styles.macroValue}>{todaysMacros.fat}g</Text>
                   <Text style={styles.macroLabel}>Gorduras</Text>
                   <Text style={styles.macroTarget}>de {nutrition.macros.fat}g</Text>
                 </View>
@@ -250,14 +395,139 @@ export default function HomeScreen() {
 
         {/* Quick Actions */}
         <View style={styles.actionsContainer}>
-          <TouchableOpacity style={styles.actionButton}>
-            <Text style={styles.actionButtonText}>📸 Adicionar Ingredientes</Text>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleCameraCapture}
+            disabled={analyzing}
+          >
+            {analyzing ? (
+              <ActivityIndicator color="white" />
+            ) : (
+              <Text style={styles.actionButtonText}>📸 Registrar por Foto</Text>
+            )}
           </TouchableOpacity>
-          <TouchableOpacity style={styles.actionButton}>
-            <Text style={styles.actionButtonText}>🍳 Gerar Receita</Text>
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: '#3b82f6' }]}
+            onPress={handlePlanSelection}
+            disabled={loadingPlan}
+          >
+            {loadingPlan ? (
+              <ActivityIndicator color="white" />
+            ) : (
+              <Text style={styles.actionButtonText}>📅 Registrar do Plano</Text>
+            )}
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Camera Confirmation Modal */}
+      <Modal visible={showCameraModal} animationType="slide" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Confirmar Refeição</Text>
+              <TouchableOpacity onPress={() => setShowCameraModal(false)}>
+                <Ionicons name="close" size={24} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            {scannedMeal && (
+              <ScrollView>
+                <View style={styles.aiResultBox}>
+                  <Text style={styles.aiLabel}>IA Identificou:</Text>
+                  <TextInput
+                    style={styles.mealNameInput}
+                    value={scannedMeal.name}
+                    onChangeText={(t) => setScannedMeal({ ...scannedMeal, name: t })}
+                  />
+                </View>
+
+                <View style={styles.macrosInputGrid}>
+                  <View style={styles.macroInputItem}>
+                    <Text style={styles.macroInputLabel}>Calorias</Text>
+                    <TextInput
+                      style={styles.macroInput}
+                      value={scannedMeal.calories?.toString()}
+                      onChangeText={(t) => setScannedMeal({ ...scannedMeal, calories: parseInt(t) || 0 })}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={styles.macroInputItem}>
+                    <Text style={styles.macroInputLabel}>Prot (g)</Text>
+                    <TextInput
+                      style={styles.macroInput}
+                      value={scannedMeal.protein?.toString()}
+                      onChangeText={(t) => setScannedMeal({ ...scannedMeal, protein: parseFloat(t) || 0 })}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={styles.macroInputItem}>
+                    <Text style={styles.macroInputLabel}>Carb (g)</Text>
+                    <TextInput
+                      style={styles.macroInput}
+                      value={scannedMeal.carbs?.toString()}
+                      onChangeText={(t) => setScannedMeal({ ...scannedMeal, carbs: parseFloat(t) || 0 })}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={styles.macroInputItem}>
+                    <Text style={styles.macroInputLabel}>Gord (g)</Text>
+                    <TextInput
+                      style={styles.macroInput}
+                      value={scannedMeal.fat?.toString()}
+                      onChangeText={(t) => setScannedMeal({ ...scannedMeal, fat: parseFloat(t) || 0 })}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.confirmButton}
+                  onPress={() => saveMeal(scannedMeal)}
+                >
+                  <Text style={styles.confirmButtonText}>Confirmar e Salvar</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Plan Selection Modal */}
+      <Modal visible={showPlanModal} animationType="slide" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Selecionar do Plano</Text>
+              <TouchableOpacity onPress={() => setShowPlanModal(false)}>
+                <Ionicons name="close" size={24} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView contentContainerStyle={styles.planList}>
+              {planRecipes.length > 0 ? (
+                planRecipes.map((recipe, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={styles.planRecipeItem}
+                    onPress={() => saveMeal(recipe)}
+                  >
+                    <View>
+                      <Text style={styles.planRecipeName}>{recipe.name}</Text>
+                      <Text style={styles.planRecipeDay}>{recipe.dayName} - {recipe.type}</Text>
+                    </View>
+                    <View style={styles.planRecipeMacros}>
+                      <Text style={styles.planRecipeCal}>{recipe.calories || recipe.macros?.calories || 0} kcal</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.emptyText}>Nenhuma receita encontrada no plano.</Text>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -545,5 +815,125 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#92400e',
+  },
+  // Modals
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    height: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1f2937',
+  },
+  aiResultBox: {
+    backgroundColor: '#f0fdf4',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dcfce7',
+    marginBottom: 24,
+  },
+  aiLabel: {
+    fontSize: 14,
+    color: '#166534',
+    marginBottom: 8,
+    fontWeight: '600',
+  },
+  mealNameInput: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#14532d',
+  },
+  macrosInputGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 24,
+  },
+  macroInputItem: {
+    width: '48%',
+    backgroundColor: '#f9fafb',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  macroInputLabel: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  macroInput: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1f2937',
+  },
+  confirmButton: {
+    backgroundColor: '#22c55e',
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  confirmButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  planList: {
+    gap: 12,
+    paddingBottom: 40,
+  },
+  planRecipeItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#f9fafb',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  planRecipeName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+  planRecipeDay: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  planRecipeMacros: {
+    backgroundColor: '#dbeafe',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  planRecipeCal: {
+    color: '#1e40af',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  emptyText: {
+    textAlign: 'center',
+    color: '#9ca3af',
+    marginTop: 20,
+    fontSize: 16,
   },
 });

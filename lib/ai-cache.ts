@@ -180,7 +180,6 @@ export async function withCache<T>(
     requestType: string,
     requestParams: any,
     fetchFn: () => Promise<T>,
-    fetchFn: () => Promise<T>,
     ttl?: number | null,
     forceRefresh: boolean = false
 ): Promise<CachedResponse<T>> {

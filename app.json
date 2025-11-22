@@ -10,7 +10,12 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.fit-pantry"
+      "bundleIdentifier": "com.anonymous.fit-pantry",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Precisamos de acesso à câmera para reconhecer ingredientes",
+        "NSMicrophoneUsageDescription": "Precisamos de acesso ao microfone para gravar ingredientes por voz",
+        "NSPhotoLibraryUsageDescription": "Precisamos de acesso à galeria para escolher fotos de ingredientes"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -20,7 +25,13 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "output": "static",
