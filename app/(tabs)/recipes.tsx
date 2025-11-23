@@ -293,7 +293,7 @@ export default function DietScreen() {
         .sort((a, b) => (mealOrder[a.type] || 99) - (mealOrder[b.type] || 99));
 
     return (
-        <SafeAreaView style={styles.container}>
+        <SafeAreaView style={styles.container} edges={['top']}>
             <ScrollView contentContainerStyle={styles.scrollContent}>
                 <View style={styles.header}>
                     <Text style={styles.title}>Seu Plano Alimentar 🥗</Text>

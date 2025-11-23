@@ -1,4 +1,4 @@
-import { generateInsights } from '@/lib/openai';
+import { generateGoalInsights } from '@/lib/openai';
 import { supabase } from '@/lib/supabase';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useRouter } from 'expo-router';
@@ -52,7 +52,7 @@ export default function ProgressScreen() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
-            const result = await generateInsights(profile, weightHistory, user.id);
+            const result = await generateGoalInsights(profile, weightHistory, user.id);
             if (result) {
                 setInsights(result);
             }
@@ -246,7 +246,7 @@ export default function ProgressScreen() {
     };
 
     return (
-        <SafeAreaView style={styles.container}>
+        <SafeAreaView style={styles.container} edges={['top']}>
             <ScrollView contentContainerStyle={styles.scrollContent}>
                 <View style={styles.header}>
                     <Text style={styles.title}>Dashboard</Text>
@@ -266,14 +266,14 @@ export default function ProgressScreen() {
                     <View style={styles.aiHeader}>
                         <Text style={styles.aiEmoji}>{insights?.emoji || '🤖'}</Text>
                         <Text style={[styles.aiTitle, { color: insights?.color || '#3b82f6' }]}>
-                            {loadingInsights ? 'Analisando...' : (insights?.title || 'FitPantry IA')}
+                            {loadingInsights ? 'Analisando...' : (insights?.title || 'FitBody AI')}
                         </Text>
                     </View>
                     <Text style={styles.aiMessage}>
                         {loadingInsights ? 'Estou analisando seus dados para gerar um insight personalizado...' : (insights?.message || 'Aguardando dados...')}
                     </Text>
                     <View style={styles.aiBadge}>
-                        <Text style={styles.aiBadgeText}>✨ FitPantry IA</Text>
+                        <Text style={styles.aiBadgeText}>✨ FitBody AI</Text>
                     </View>
                 </View>
 

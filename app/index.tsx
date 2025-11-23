@@ -1,8 +1,7 @@
-import { View, Text, ImageBackground, TouchableOpacity, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
-import { Link, router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Link, router } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
+import { ImageBackground, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 export default function WelcomeScreen() {
     return (
@@ -19,7 +18,7 @@ export default function WelcomeScreen() {
 
                 <View style={styles.titleContainer}>
                     <Text style={styles.title}>
-                        Fit<Text style={styles.titleAccent}>Pantry</Text>
+                        Fit<Text style={styles.titleAccent}>Body AI</Text>
                     </Text>
                     <Text style={styles.subtitle}>
                         Sua dieta e despensa em perfeita sintonia.

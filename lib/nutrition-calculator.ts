@@ -1,6 +1,6 @@
 /**
  * Nutrition Calculator
- * Cálculos de TMB, TDEE e macros baseados nas regras de negócio do FitPantry
+ * Cálculos de TMB, TDEE e macros baseados nas regras de negócio do FitBody AI
  */
 
 export type Sex = 'male' | 'female';

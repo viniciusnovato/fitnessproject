@@ -68,7 +68,7 @@ export function AILoadingOverlay({ visible, message = "Gerando seu plano..." }: 
                         <View style={styles.pulseRing} />
                     </View>
 
-                    <Text style={styles.title}>FitPantry AI</Text>
+                    <Text style={styles.title}>FitBody AI</Text>
 
                     <View style={styles.stepContainer}>
                         <ActivityIndicator size="small" color="#22c55e" style={styles.spinner} />

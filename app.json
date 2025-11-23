@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "fit-pantry",
-    "slug": "fit-pantry",
+    "name": "FitBody AI",
+    "slug": "fitbody-ai",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",

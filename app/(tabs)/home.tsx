@@ -1,6 +1,6 @@
 import { getActiveDietPlan } from '@/lib/diet';
 import { calculateNutrition, parseActivityLevel, parseGoal, parseSex } from '@/lib/nutrition-calculator';
-import { analyzeMealImage } from '@/lib/openai';
+import { analyzeMealImage, analyzeMealWithContext, generateGoalInsights } from '@/lib/openai';
 import { supabase } from '@/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -16,6 +16,7 @@ export default function HomeScreen() {
   const [nutrition, setNutrition] = useState<any>(null);
 
   const [weightHistory, setWeightHistory] = useState<any[]>([]);
+  const [goalInsights, setGoalInsights] = useState<any>(null);
 
   // Meal Logging State
   const [todaysMeals, setTodaysMeals] = useState<any[]>([]);
@@ -25,6 +26,14 @@ export default function HomeScreen() {
   const [analyzing, setAnalyzing] = useState(false);
   const [showCameraModal, setShowCameraModal] = useState(false);
   const [scannedMeal, setScannedMeal] = useState<any>(null);
+
+  // Enhanced Photo Capture State
+  const [capturedImages, setCapturedImages] = useState<string[]>([]);
+  const [userDescription, setUserDescription] = useState('');
+  const [mealTypes, setMealTypes] = useState<Set<string>>(new Set(['meal']));
+  const [showEnhancedModal, setShowEnhancedModal] = useState(false);
+  const [showPhotoHelpModal, setShowPhotoHelpModal] = useState(false);
+  const [dontShowPhotoHelp, setDontShowPhotoHelp] = useState(false);
 
   // Plan/Recipe State
   const [showPlanModal, setShowPlanModal] = useState(false);
@@ -62,7 +71,7 @@ export default function HomeScreen() {
         .from('weight_history')
         .select('*')
         .eq('user_id', user.id)
-        .order('date', { ascending: true }); // Oldest first
+        .order('date', { ascending: false }); // Newest first
 
       setWeightHistory(historyData || []);
 
@@ -101,13 +110,33 @@ export default function HomeScreen() {
     router.replace('/');
   };
 
+  const fetchGoalInsights = async () => {
+    if (!profile || !user || weightHistory.length === 0) return;
+
+    try {
+      const insights = await generateGoalInsights(profile, weightHistory, user.id);
+      if (insights) {
+        setGoalInsights(insights);
+      }
+    } catch (error) {
+      console.error('Error fetching goal insights:', error);
+    }
+  };
+
+  // Fetch insights when profile and weight history are available
+  useEffect(() => {
+    if (profile && weightHistory.length > 0) {
+      fetchGoalInsights();
+    }
+  }, [profile, weightHistory]);
+
   const calculateProgress = () => {
     if (!profile?.weight || !profile?.target_weight) return 0;
 
     const current = parseFloat(profile.weight);
     const target = parseFloat(profile.target_weight);
-    // Use oldest history entry as start, or current if no history
-    const start = weightHistory.length > 0 ? weightHistory[0].weight : current;
+    // Use oldest history entry as start (last item since we fetch descending), or current if no history
+    const start = weightHistory.length > 0 ? weightHistory[weightHistory.length - 1].weight : current;
 
     if (current === target) return 100;
     if (start === target) return 100;
@@ -151,6 +180,17 @@ export default function HomeScreen() {
   };
 
   const handleCameraCapture = async () => {
+    // Show help modal first time (unless user opted out)
+    if (!dontShowPhotoHelp) {
+      setShowPhotoHelpModal(true);
+      return;
+    }
+
+    // Proceed directly to camera
+    await takePicture();
+  };
+
+  const takePicture = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permissão necessária', 'Precisamos de acesso à câmera para analisar sua comida.');
@@ -165,7 +205,9 @@ export default function HomeScreen() {
     });
 
     if (!result.canceled && result.assets[0].base64) {
-      analyzeImage(result.assets[0].base64);
+      // Add first image and open enhanced modal
+      setCapturedImages([result.assets[0].base64]);
+      setShowEnhancedModal(true);
     }
   };
 
@@ -185,6 +227,93 @@ export default function HomeScreen() {
       setAnalyzing(false);
     }
   };
+
+  // Enhanced photo capture functions
+  const handleAddPhoto = async () => {
+    if (capturedImages.length >= 3) {
+      Alert.alert('Limite atingido', 'Você pode adicionar no máximo 3 fotos.');
+      return;
+    }
+
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permissão necessária', 'Precisamos de acesso à câmera.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.5,
+      base64: true,
+    });
+
+    if (!result.canceled && result.assets[0].base64) {
+      setCapturedImages([...capturedImages, result.assets[0].base64]);
+    }
+  };
+
+  const handleRemovePhoto = (index: number) => {
+    const newImages = capturedImages.filter((_, i) => i !== index);
+    setCapturedImages(newImages);
+    if (newImages.length === 0) {
+      setShowEnhancedModal(false);
+    }
+  };
+
+  const toggleMealType = (type: string) => {
+    const newTypes = new Set(mealTypes);
+    if (newTypes.has(type)) {
+      newTypes.delete(type);
+      if (newTypes.size === 0) newTypes.add('meal'); // Always have at least one type
+    } else {
+      newTypes.add(type);
+    }
+    setMealTypes(newTypes);
+  };
+
+  const analyzeWithContext = async () => {
+    if (capturedImages.length === 0) {
+      Alert.alert('Erro', 'Adicione pelo menos uma foto.');
+      return;
+    }
+
+    setAnalyzing(true);
+    try {
+      const analysis = await analyzeMealWithContext({
+        images: capturedImages,
+        description: userDescription.trim() || undefined,
+        mealTypes: Array.from(mealTypes),
+        userId: user.id,
+      });
+
+      if (analysis && !analysis.error) {
+        setScannedMeal(analysis);
+        setShowEnhancedModal(false);
+        setShowCameraModal(true);
+        // Reset enhanced modal state
+        setCapturedImages([]);
+        setUserDescription('');
+        setMealTypes(new Set(['meal']));
+      } else {
+        Alert.alert(
+          'Não consegui identificar',
+          analysis?.error || 'Tente tirar uma foto mais clara do prato ou adicione uma descrição do que você comeu.\n\nDica: Fotos da tabela nutricional ajudam muito na precisão!',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error: any) {
+      console.error('Erro na análise:', error);
+      Alert.alert(
+        'Erro na análise',
+        'Houve um problema ao analisar a imagem. Verifique sua conexão e tente novamente.\n\nSe o problema persistir, tente adicionar uma descrição do que você comeu.',
+        [{ text: 'OK' }]
+      );
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
 
   const handlePlanSelection = async () => {
     setLoadingPlan(true);
@@ -241,14 +370,43 @@ export default function HomeScreen() {
     }
   };
 
+  const deleteMeal = async (mealId: string) => {
+    Alert.alert(
+      'Deletar Refeição',
+      'Tem certeza que deseja deletar esta refeição?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Deletar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { error } = await supabase
+                .from('meals_log')
+                .delete()
+                .eq('id', mealId);
+
+              if (error) throw error;
+
+              Alert.alert('Sucesso', 'Refeição deletada!');
+              loadTodaysMeals(); // Refresh data
+            } catch (error) {
+              Alert.alert('Erro', 'Falha ao deletar refeição.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const getStartingWeight = () => {
-    if (weightHistory.length > 0) return weightHistory[0].weight;
+    if (weightHistory.length > 0) return weightHistory[weightHistory.length - 1].weight;
     return profile?.weight || '—';
   };
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Carregando...</Text>
         </View>
@@ -257,7 +415,7 @@ export default function HomeScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* Header */}
         <View style={styles.header}>
@@ -279,9 +437,11 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Meta Card */}
+        {/* Meta com Insights de IA */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Sua Meta</Text>
+
+          {/* Goal Stats */}
           <View style={styles.goalContainer}>
             <View style={styles.goalItem}>
               <Text style={styles.goalValue}>{getStartingWeight()}kg</Text>
@@ -298,10 +458,31 @@ export default function HomeScreen() {
               <Text style={styles.goalLabel}>Meta</Text>
             </View>
           </View>
-          <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${calculateProgress()}%` }]} />
-          </View>
-          <Text style={styles.progressText}>{calculateProgress()}% concluído</Text>
+
+          {/* AI Insights */}
+          {goalInsights ? (
+            <View style={[styles.goalInsightsCard, {
+              backgroundColor: goalInsights.bgColor || '#eff6ff',
+              borderColor: goalInsights.borderColor || '#bfdbfe'
+            }]}>
+              <View style={styles.goalInsightsHeader}>
+                <Text style={styles.goalInsightsEmoji}>{goalInsights.emoji || '🤖'}</Text>
+                <Text style={[styles.goalInsightsTitle, { color: goalInsights.color || '#3b82f6' }]}>
+                  {goalInsights.title || 'Análise da Meta'}
+                </Text>
+              </View>
+              <Text style={styles.goalInsightsMessage}>
+                {goalInsights.message || 'Analisando seu progresso...'}
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.progressBar}>
+                <View style={[styles.progressFill, { width: `${calculateProgress()}%` }]} />
+              </View>
+              <Text style={styles.progressText}>{calculateProgress()}% concluído</Text>
+            </>
+          )}
         </View>
 
         {/* Macros do Dia */}
@@ -311,24 +492,24 @@ export default function HomeScreen() {
             <>
               <View style={styles.macrosGrid}>
                 <View style={styles.macroCard}>
-                  <Text style={styles.macroValue}>{todaysMacros.calories}</Text>
+                  <Text style={styles.macroValue}>{Math.round(todaysMacros.calories)}</Text>
                   <Text style={styles.macroLabel}>Calorias</Text>
-                  <Text style={styles.macroTarget}>de {nutrition.targetCalories}</Text>
+                  <Text style={styles.macroTarget}>de {Math.round(nutrition.targetCalories)}</Text>
                 </View>
                 <View style={styles.macroCard}>
-                  <Text style={styles.macroValue}>{todaysMacros.protein}g</Text>
+                  <Text style={styles.macroValue}>{Math.round(todaysMacros.protein)}g</Text>
                   <Text style={styles.macroLabel}>Proteínas</Text>
-                  <Text style={styles.macroTarget}>de {nutrition.macros.protein}g</Text>
+                  <Text style={styles.macroTarget}>de {Math.round(nutrition.macros.protein)}g</Text>
                 </View>
                 <View style={styles.macroCard}>
-                  <Text style={styles.macroValue}>{todaysMacros.carbs}g</Text>
+                  <Text style={styles.macroValue}>{Math.round(todaysMacros.carbs)}g</Text>
                   <Text style={styles.macroLabel}>Carbos</Text>
-                  <Text style={styles.macroTarget}>de {nutrition.macros.carbs}g</Text>
+                  <Text style={styles.macroTarget}>de {Math.round(nutrition.macros.carbs)}g</Text>
                 </View>
                 <View style={styles.macroCard}>
-                  <Text style={styles.macroValue}>{todaysMacros.fat}g</Text>
+                  <Text style={styles.macroValue}>{Math.round(todaysMacros.fat)}g</Text>
                   <Text style={styles.macroLabel}>Gorduras</Text>
-                  <Text style={styles.macroTarget}>de {nutrition.macros.fat}g</Text>
+                  <Text style={styles.macroTarget}>de {Math.round(nutrition.macros.fat)}g</Text>
                 </View>
               </View>
 
@@ -364,7 +545,7 @@ export default function HomeScreen() {
                       <Text style={styles.nutritionDetailSubtitle}>Para atingir seu objetivo</Text>
                     </View>
                   </View>
-                  <Text style={styles.nutritionDetailValue}>{nutrition.dailyCalories} kcal/dia</Text>
+                  <Text style={styles.nutritionDetailValue}>{nutrition.targetCalories} kcal/dia</Text>
                 </View>
               </View>
 
@@ -385,12 +566,19 @@ export default function HomeScreen() {
         {/* Refeições */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Refeições de Hoje</Text>
-          <View style={styles.mealsList}>
-            <MealItem name="Café da Manhã" time="08:00" completed />
-            <MealItem name="Almoço" time="12:30" completed />
-            <MealItem name="Lanche" time="16:00" />
-            <MealItem name="Jantar" time="19:30" />
-          </View>
+          {todaysMeals.length > 0 ? (
+            <View style={styles.mealsList}>
+              {todaysMeals.map((meal, index) => (
+                <MealLogItem
+                  key={meal.id || index}
+                  meal={meal}
+                  onDelete={() => deleteMeal(meal.id)}
+                />
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.noMealsText}>Nenhuma refeição registrada hoje</Text>
+          )}
         </View>
 
         {/* Quick Actions */}
@@ -419,6 +607,203 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Photo Help Modal */}
+      <Modal visible={showPhotoHelpModal} animationType="fade" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.helpModalContent}>
+            <View style={styles.helpIconContainer}>
+              <Ionicons name="camera" size={48} color="#22c55e" />
+            </View>
+
+            <Text style={styles.helpTitle}>Dicas para Melhor Precisão</Text>
+
+            <View style={styles.helpTipsContainer}>
+              <View style={styles.helpTip}>
+                <Ionicons name="checkmark-circle" size={24} color="#22c55e" />
+                <View style={styles.helpTipText}>
+                  <Text style={styles.helpTipTitle}>📸 Foto 1: Prato Principal</Text>
+                  <Text style={styles.helpTipDescription}>Tire uma foto clara do seu prato completo</Text>
+                </View>
+              </View>
+
+              <View style={styles.helpTip}>
+                <Ionicons name="checkmark-circle" size={24} color="#22c55e" />
+                <View style={styles.helpTipText}>
+                  <Text style={styles.helpTipTitle}>🏷️ Foto 2: Rótulo (opcional)</Text>
+                  <Text style={styles.helpTipDescription}>Foto da tabela nutricional aumenta muito a precisão!</Text>
+                </View>
+              </View>
+
+              <View style={styles.helpTip}>
+                <Ionicons name="checkmark-circle" size={24} color="#22c55e" />
+                <View style={styles.helpTipText}>
+                  <Text style={styles.helpTipTitle}>✍️ Descrição (opcional)</Text>
+                  <Text style={styles.helpTipDescription}>Ex: "Frango 200g, arroz 150g, Whey 30g"</Text>
+                </View>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.dontShowAgainButton}
+              onPress={() => setDontShowPhotoHelp(!dontShowPhotoHelp)}
+            >
+              <View style={[styles.checkbox, dontShowPhotoHelp && styles.checkboxChecked]}>
+                {dontShowPhotoHelp && <Ionicons name="checkmark" size={16} color="white" />}
+              </View>
+              <Text style={styles.dontShowAgainText}>Não mostrar novamente</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.helpOkButton}
+              onPress={() => {
+                setShowPhotoHelpModal(false);
+                takePicture();
+              }}
+            >
+              <Text style={styles.helpOkButtonText}>Entendi, vamos lá!</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.helpCancelButton}
+              onPress={() => setShowPhotoHelpModal(false)}
+            >
+              <Text style={styles.helpCancelButtonText}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Enhanced Photo Capture Modal */}
+      <Modal visible={showEnhancedModal} animationType="slide" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.enhancedModalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Registrar Refeição</Text>
+              <TouchableOpacity onPress={() => {
+                setShowEnhancedModal(false);
+                setCapturedImages([]);
+                setUserDescription('');
+                setMealTypes(new Set(['meal']));
+              }}>
+                <Ionicons name="close" size={24} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.enhancedModalScroll}>
+              {/* Photos Section */}
+              <Text style={styles.sectionLabel}>Fotos {capturedImages.length > 0 && `(${capturedImages.length}/3)`}</Text>
+              <View style={styles.photosGrid}>
+                {capturedImages.map((img, index) => (
+                  <View key={index} style={styles.photoThumbnail}>
+                    <View style={styles.photoPlaceholder}>
+                      <Ionicons name="image" size={32} color="#22c55e" />
+                      <Text style={styles.photoLabel}>
+                        {index === 0 ? 'Prato Principal' : index === 1 ? 'Acompanhamentos/Rótulo' : 'Outro'}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.removePhotoButton}
+                      onPress={() => handleRemovePhoto(index)}
+                    >
+                      <Ionicons name="close-circle" size={24} color="#ef4444" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+
+                {capturedImages.length < 3 && (
+                  <TouchableOpacity
+                    style={styles.addPhotoButton}
+                    onPress={handleAddPhoto}
+                  >
+                    <Ionicons name="add-circle" size={32} color="#22c55e" />
+                    <Text style={styles.addPhotoText}>Adicionar</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Description Section */}
+              <Text style={styles.sectionLabel}>Descrição (opcional)</Text>
+              <TextInput
+                style={styles.descriptionInput}
+                placeholder="Ex: Frango grelhado 200g, arroz integral 150g, Whey protein 30g..."
+                placeholderTextColor="#9ca3af"
+                value={userDescription}
+                onChangeText={setUserDescription}
+                multiline
+                numberOfLines={3}
+                maxLength={500}
+              />
+              <Text style={styles.charCounter}>{userDescription.length}/500</Text>
+
+              {/* Meal Type Section */}
+              <Text style={styles.sectionLabel}>Tipo</Text>
+              <View style={styles.typeChipsContainer}>
+                <TouchableOpacity
+                  style={[
+                    styles.typeChip,
+                    mealTypes.has('meal') && styles.typeChipActive
+                  ]}
+                  onPress={() => toggleMealType('meal')}
+                >
+                  <Text style={[
+                    styles.typeChipText,
+                    mealTypes.has('meal') && styles.typeChipTextActive
+                  ]}>
+                    🍽️ Refeição
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.typeChip,
+                    mealTypes.has('drink') && styles.typeChipActive
+                  ]}
+                  onPress={() => toggleMealType('drink')}
+                >
+                  <Text style={[
+                    styles.typeChipText,
+                    mealTypes.has('drink') && styles.typeChipTextActive
+                  ]}>
+                    🥤 Bebida
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.typeChip,
+                    mealTypes.has('supplement') && styles.typeChipActive
+                  ]}
+                  onPress={() => toggleMealType('supplement')}
+                >
+                  <Text style={[
+                    styles.typeChipText,
+                    mealTypes.has('supplement') && styles.typeChipTextActive
+                  ]}>
+                    💊 Suplemento
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Analyze Button */}
+              <TouchableOpacity
+                style={[styles.analyzeButton, analyzing && styles.analyzeButtonDisabled]}
+                onPress={analyzeWithContext}
+                disabled={analyzing || capturedImages.length === 0}
+              >
+                {analyzing ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <>
+                    <Ionicons name="sparkles" size={20} color="white" />
+                    <Text style={styles.analyzeButtonText}>Analisar com IA</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       {/* Camera Confirmation Modal */}
       <Modal visible={showCameraModal} animationType="slide" transparent={true}>
@@ -542,6 +927,34 @@ function MealItem({ name, time, completed = false }: { name: string; time: strin
         <Text style={styles.mealName}>{name}</Text>
         <Text style={styles.mealTime}>{time}</Text>
       </View>
+    </View>
+  );
+}
+
+function MealLogItem({ meal, onDelete }: { meal: any; onDelete: () => void }) {
+  const formatTime = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  return (
+    <View style={styles.mealLogItem}>
+      <View style={styles.mealLogInfo}>
+        <Text style={styles.mealLogName}>{meal.name}</Text>
+        <Text style={styles.mealLogTime}>{formatTime(meal.date)}</Text>
+        <View style={styles.mealLogMacros}>
+          <Text style={styles.mealLogMacroText}>{Math.round(meal.calories)} kcal</Text>
+          <Text style={styles.mealLogMacroText}>•</Text>
+          <Text style={styles.mealLogMacroText}>{Math.round(meal.protein)}g P</Text>
+          <Text style={styles.mealLogMacroText}>•</Text>
+          <Text style={styles.mealLogMacroText}>{Math.round(meal.carbs)}g C</Text>
+          <Text style={styles.mealLogMacroText}>•</Text>
+          <Text style={styles.mealLogMacroText}>{Math.round(meal.fat)}g G</Text>
+        </View>
+      </View>
+      <TouchableOpacity onPress={onDelete} style={styles.deleteButton}>
+        <Ionicons name="trash-outline" size={20} color="#ef4444" />
+      </TouchableOpacity>
     </View>
   );
 }
@@ -935,5 +1348,295 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
     marginTop: 20,
     fontSize: 16,
+  },
+  // Meal Log Item Styles
+  mealLogItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f9fafb',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  mealLogInfo: {
+    flex: 1,
+  },
+  mealLogName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+  mealLogTime: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginBottom: 6,
+  },
+  mealLogMacros: {
+    flexDirection: 'row',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  mealLogMacroText: {
+    fontSize: 12,
+    color: '#3b82f6',
+    fontWeight: '500',
+  },
+  deleteButton: {
+    padding: 8,
+    marginLeft: 8,
+  },
+  noMealsText: {
+    textAlign: 'center',
+    color: '#9ca3af',
+    fontSize: 14,
+    paddingVertical: 20,
+  },
+  // Enhanced Modal Styles
+  enhancedModalContent: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    maxHeight: '90%',
+  },
+  enhancedModalScroll: {
+    maxHeight: '100%',
+  },
+  sectionLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 12,
+    marginTop: 16,
+  },
+  photosGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 8,
+  },
+  photoThumbnail: {
+    width: 100,
+    height: 100,
+    position: 'relative',
+  },
+  photoPlaceholder: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#f0fdf4',
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#22c55e',
+    borderStyle: 'dashed',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  photoLabel: {
+    fontSize: 12,
+    color: '#16a34a',
+    marginTop: 4,
+    fontWeight: '500',
+  },
+  removePhotoButton: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    backgroundColor: 'white',
+    borderRadius: 12,
+  },
+  addPhotoButton: {
+    width: 100,
+    height: 100,
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#e5e7eb',
+    borderStyle: 'dashed',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addPhotoText: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 4,
+  },
+  descriptionInput: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    padding: 12,
+    fontSize: 14,
+    color: '#1f2937',
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  charCounter: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: 'right',
+    marginTop: 4,
+  },
+  typeChipsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
+  },
+  typeChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: '#f3f4f6',
+    borderWidth: 2,
+    borderColor: '#e5e7eb',
+  },
+  typeChipActive: {
+    backgroundColor: '#dcfce7',
+    borderColor: '#22c55e',
+  },
+  typeChipText: {
+    fontSize: 14,
+    color: '#6b7280',
+    fontWeight: '500',
+  },
+  typeChipTextActive: {
+    color: '#16a34a',
+    fontWeight: '600',
+  },
+  analyzeButton: {
+    backgroundColor: '#22c55e',
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 24,
+    marginBottom: 16,
+  },
+  analyzeButtonDisabled: {
+    backgroundColor: '#9ca3af',
+  },
+  analyzeButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  // Help Modal Styles
+  helpModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 24,
+    padding: 24,
+    margin: 20,
+    maxWidth: 400,
+    alignSelf: 'center',
+  },
+  helpIconContainer: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  helpTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#1f2937',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  helpTipsContainer: {
+    gap: 16,
+    marginBottom: 20,
+  },
+  helpTip: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  helpTipText: {
+    flex: 1,
+  },
+  helpTipTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+  helpTipDescription: {
+    fontSize: 14,
+    color: '#6b7280',
+    lineHeight: 20,
+  },
+  dontShowAgainButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 20,
+    paddingVertical: 8,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#d1d5db',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxChecked: {
+    backgroundColor: '#22c55e',
+    borderColor: '#22c55e',
+  },
+  dontShowAgainText: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  helpOkButton: {
+    backgroundColor: '#22c55e',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  helpOkButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  helpCancelButton: {
+    padding: 12,
+    alignItems: 'center',
+  },
+  helpCancelButtonText: {
+    color: '#6b7280',
+    fontSize: 14,
+  },
+  // Goal Insights Styles
+  goalInsightsCard: {
+    marginTop: 16,
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  goalInsightsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  goalInsightsEmoji: {
+    fontSize: 24,
+  },
+  goalInsightsTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    flex: 1,
+  },
+  goalInsightsMessage: {
+    fontSize: 14,
+    color: '#4b5563',
+    lineHeight: 20,
   },
 });

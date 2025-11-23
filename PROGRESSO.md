@@ -1,6 +1,6 @@
 # FitPantry - Progresso de Desenvolvimento
 
-> **Última atualização:** 2025-11-21
+> **Última atualização:** 2025-11-23
 
 ## 📊 Visão Geral
 
@@ -145,6 +145,48 @@
     - Fix de RLS para salvar planos
     - Fix de constraint única no cache
     - Aumento de tokens para evitar cortes na resposta JSON
+
+### 6. Melhorias Recentes (2025-11-23)
+
+#### ✅ Análise de Fotos com IA Aprimorada
+- **Arquivo:** [`lib/openai.ts`](file:///Users/viniciusnovato/Documents/fitnessproject/lib/openai.ts)
+- **Funcionalidades:**
+  - Prompt melhorado para estimar **peso em gramas** de cada componente
+  - Contexto de **porções padrão brasileiras** (concha de arroz = 100g, etc.)
+  - Retorno detalhado com **breakdown por alimento**
+  - Campo `portionSize` e `components` no JSON de resposta
+  - Max tokens aumentado para 1000
+
+#### ✅ UI da Despensa Melhorada
+- **Arquivo:** [`app/(tabs)/pantry.tsx`](file:///Users/viniciusnovato/Documents/fitnessproject/app/(tabs)/pantry.tsx)
+- **Funcionalidades:**
+  - **Header com estatísticas**: Total, Disponíveis (verde), Acabando (laranja)
+  - **Campo de busca** em tempo real com ícone e botão limpar
+  - **Filtros por categoria** com chips clicáveis (Todos, Proteína, Carboidrato, etc.)
+  - Filtros combinados (busca + categoria funcionam juntos)
+  - Estado vazio melhorado quando não há resultados
+
+#### ✅ Registro de Refeições com Múltiplas Fotos (COMPLETO)
+- **Arquivos:** [`lib/openai.ts`](file:///Users/viniciusnovato/Documents/fitnessproject/lib/openai.ts), [`app/(tabs)/home.tsx`](file:///Users/viniciusnovato/Documents/fitnessproject/app/(tabs)/home.tsx)
+- **Funcionalidades Implementadas:**
+  - Nova função `analyzeMealWithContext` que suporta:
+    - **Múltiplas imagens** (até 3 fotos)
+    - **Descrição do usuário** (campo de texto opcional)
+    - **Tipos de consumo**: Refeição, Bebida, Suplemento
+    - **Tabela nutricional**: IA prioriza valores exatos se detectar tabela
+  - Estados e funções auxiliares criadas:
+    - `handleAddPhoto` - adicionar mais fotos
+    - `handleRemovePhoto` - remover fotos
+    - `toggleMealType` - alternar tipos (meal/drink/supplement)
+    - `analyzeWithContext` - análise com contexto completo
+  - **UI do modal melhorado:**
+    - Thumbnails de fotos com labels (Prato/Tabela/Outro)
+    - Botão "+" para adicionar mais fotos
+    - Botão "X" para remover fotos
+    - Campo de descrição com contador de caracteres (500 max)
+    - Chips de tipo multi-seleção (🍽️ Refeição, 🥤 Bebida, 💊 Suplemento)
+    - Botão "Analisar com IA" com loading state
+  - **Estilos completos** para todos os componentes
 
 ---
 

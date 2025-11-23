@@ -2,41 +2,63 @@ import { analyzeMealImage } from '@/lib/openai';
 import { supabase } from '@/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function TrackerScreen() {
     const [meals, setMeals] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [analyzing, setAnalyzing] = useState(false);
+    const [selectedDate, setSelectedDate] = useState(new Date());
+    const [user, setUser] = useState<any>(null);
 
     // Modal States
     const [showModal, setShowModal] = useState(false);
     const [scannedMeal, setScannedMeal] = useState<any>(null);
 
-    useEffect(() => {
-        loadMeals();
-    }, []);
+    useFocusEffect(
+        useCallback(() => {
+            checkUser();
+        }, [])
+    );
+
+    useFocusEffect(
+        useCallback(() => {
+            if (user) {
+                loadMeals();
+            }
+        }, [selectedDate, user])
+    );
+
+    const checkUser = async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        setUser(user);
+        setLoading(false);
+    };
 
     const loadMeals = async () => {
+        if (!user) return;
+
         try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
+            const startOfDay = new Date(selectedDate);
+            startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(selectedDate);
+            endOfDay.setHours(23, 59, 59, 999);
 
             const { data, error } = await supabase
                 .from('meals_log')
                 .select('*')
                 .eq('user_id', user.id)
-                .order('date', { ascending: false })
-                .limit(20);
+                .gte('date', startOfDay.toISOString())
+                .lte('date', endOfDay.toISOString())
+                .order('date', { ascending: false });
 
             if (error) throw error;
             setMeals(data || []);
         } catch (error) {
             console.error(error);
-        } finally {
-            setLoading(false);
         }
     };
 
@@ -62,7 +84,6 @@ export default function TrackerScreen() {
     const analyzeImage = async (base64: string) => {
         setAnalyzing(true);
         try {
-            const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
             const analysis = await analyzeMealImage(base64, user.id);
@@ -80,12 +101,9 @@ export default function TrackerScreen() {
     };
 
     const saveMeal = async () => {
-        if (!scannedMeal) return;
+        if (!scannedMeal || !user) return;
 
         try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
-
             const { error } = await supabase.from('meals_log').insert({
                 user_id: user.id,
                 name: scannedMeal.name,
@@ -93,7 +111,8 @@ export default function TrackerScreen() {
                 protein: scannedMeal.protein,
                 carbs: scannedMeal.carbs,
                 fat: scannedMeal.fat,
-                is_generated: true
+                is_generated: true,
+                date: new Date().toISOString()
             });
 
             if (error) throw error;
@@ -107,67 +126,185 @@ export default function TrackerScreen() {
         }
     };
 
-    const getTotalCalories = () => {
-        // Filter for today's meals
-        const today = new Date().toDateString();
-        const todaysMeals = meals.filter(m => new Date(m.date).toDateString() === today);
-        return todaysMeals.reduce((acc, curr) => acc + (curr.calories || 0), 0);
+    const deleteMeal = async (mealId: string) => {
+        Alert.alert(
+            'Deletar Refeição',
+            'Tem certeza que deseja deletar esta refeição?',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Deletar',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            const { error } = await supabase
+                                .from('meals_log')
+                                .delete()
+                                .eq('id', mealId);
+
+                            if (error) throw error;
+
+                            Alert.alert('Sucesso', 'Refeição deletada!');
+                            loadMeals();
+                        } catch (error) {
+                            Alert.alert('Erro', 'Falha ao deletar refeição.');
+                        }
+                    }
+                }
+            ]
+        );
     };
 
+    const getTotals = () => {
+        return meals.reduce((acc, meal) => ({
+            calories: acc.calories + (meal.calories || 0),
+            protein: acc.protein + (meal.protein || 0),
+            carbs: acc.carbs + (meal.carbs || 0),
+            fat: acc.fat + (meal.fat || 0),
+        }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+    };
+
+    const changeDate = (days: number) => {
+        const newDate = new Date(selectedDate);
+        newDate.setDate(newDate.getDate() + days);
+        setSelectedDate(newDate);
+    };
+
+    const isToday = () => {
+        const today = new Date();
+        return selectedDate.toDateString() === today.toDateString();
+    };
+
+    const formatDate = () => {
+        if (isToday()) return 'Hoje';
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        if (selectedDate.toDateString() === yesterday.toDateString()) return 'Ontem';
+
+        return selectedDate.toLocaleDateString('pt-BR', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric'
+        });
+    };
+
+    const totals = getTotals();
+
     return (
-        <SafeAreaView className="flex-1 bg-slate-50">
-            <ScrollView className="p-6">
-                <View className="flex-row justify-between items-center mb-6">
-                    <View>
-                        <Text className="text-2xl font-bold text-slate-900">Diário Alimentar</Text>
-                        <Text className="text-slate-500">Hoje: {getTotalCalories()} kcal</Text>
-                    </View>
+        <SafeAreaView style={styles.container} edges={['top']}>
+            <ScrollView contentContainerStyle={styles.scrollContent}>
+                {/* Header */}
+                <View style={styles.header}>
+                    <Text style={styles.title}>Diário Alimentar</Text>
                     <TouchableOpacity
                         onPress={pickImage}
                         disabled={analyzing}
-                        className="bg-green-600 p-3 rounded-full flex-row items-center"
+                        style={styles.scanButton}
                     >
                         {analyzing ? (
                             <ActivityIndicator color="white" />
                         ) : (
                             <>
-                                <Ionicons name="camera" size={24} color="white" />
-                                <Text className="text-white font-bold ml-2">Escanear</Text>
+                                <Ionicons name="camera" size={20} color="white" />
+                                <Text style={styles.scanButtonText}>Escanear</Text>
                             </>
                         )}
                     </TouchableOpacity>
                 </View>
 
-                <View className="space-y-4">
-                    {meals.map((meal) => (
-                        <View key={meal.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
-                            <View className="flex-row justify-between items-start">
-                                <View className="flex-1">
-                                    <Text className="font-bold text-lg text-slate-800">{meal.name}</Text>
-                                    <Text className="text-slate-500 text-sm">
-                                        {new Date(meal.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                    </Text>
-                                </View>
-                                <View className="bg-green-100 px-3 py-1 rounded-full">
-                                    <Text className="text-green-700 font-bold">{meal.calories} kcal</Text>
-                                </View>
-                            </View>
-                            <View className="flex-row mt-3 space-x-4">
-                                <Text className="text-xs text-slate-500">🥩 {meal.protein}g Prot</Text>
-                                <Text className="text-xs text-slate-500">🍞 {meal.carbs}g Carb</Text>
-                                <Text className="text-xs text-slate-500">🥑 {meal.fat}g Gord</Text>
-                            </View>
+                {/* Date Navigator */}
+                <View style={styles.dateNavigator}>
+                    <TouchableOpacity onPress={() => changeDate(-1)} style={styles.dateButton}>
+                        <Ionicons name="chevron-back" size={24} color="#3b82f6" />
+                    </TouchableOpacity>
+                    <View style={styles.dateDisplay}>
+                        <Text style={styles.dateText}>{formatDate()}</Text>
+                        <Text style={styles.dateSubtext}>
+                            {selectedDate.toLocaleDateString('pt-BR', { weekday: 'long' })}
+                        </Text>
+                    </View>
+                    <TouchableOpacity
+                        onPress={() => changeDate(1)}
+                        style={styles.dateButton}
+                        disabled={isToday()}
+                    >
+                        <Ionicons
+                            name="chevron-forward"
+                            size={24}
+                            color={isToday() ? '#d1d5db' : '#3b82f6'}
+                        />
+                    </TouchableOpacity>
+                </View>
+
+                {/* Macros Summary */}
+                <View style={styles.summaryCard}>
+                    <Text style={styles.summaryTitle}>Resumo do Dia</Text>
+                    <View style={styles.macrosGrid}>
+                        <View style={styles.macroItem}>
+                            <Text style={styles.macroValue}>{Math.round(totals.calories)}</Text>
+                            <Text style={styles.macroLabel}>Calorias</Text>
                         </View>
-                    ))}
+                        <View style={styles.macroItem}>
+                            <Text style={styles.macroValue}>{Math.round(totals.protein)}g</Text>
+                            <Text style={styles.macroLabel}>Proteínas</Text>
+                        </View>
+                        <View style={styles.macroItem}>
+                            <Text style={styles.macroValue}>{Math.round(totals.carbs)}g</Text>
+                            <Text style={styles.macroLabel}>Carbos</Text>
+                        </View>
+                        <View style={styles.macroItem}>
+                            <Text style={styles.macroValue}>{Math.round(totals.fat)}g</Text>
+                            <Text style={styles.macroLabel}>Gorduras</Text>
+                        </View>
+                    </View>
+                </View>
+
+                {/* Meals List */}
+                <View style={styles.mealsSection}>
+                    <Text style={styles.sectionTitle}>Refeições ({meals.length})</Text>
+                    {meals.length > 0 ? (
+                        <View style={styles.mealsList}>
+                            {meals.map((meal) => (
+                                <View key={meal.id} style={styles.mealCard}>
+                                    <View style={styles.mealInfo}>
+                                        <Text style={styles.mealName}>{meal.name}</Text>
+                                        <Text style={styles.mealTime}>
+                                            {new Date(meal.date).toLocaleTimeString('pt-BR', {
+                                                hour: '2-digit',
+                                                minute: '2-digit'
+                                            })}
+                                        </Text>
+                                        <View style={styles.mealMacros}>
+                                            <Text style={styles.mealMacroText}>{Math.round(meal.calories)} kcal</Text>
+                                            <Text style={styles.mealMacroText}>•</Text>
+                                            <Text style={styles.mealMacroText}>{Math.round(meal.protein)}g P</Text>
+                                            <Text style={styles.mealMacroText}>•</Text>
+                                            <Text style={styles.mealMacroText}>{Math.round(meal.carbs)}g C</Text>
+                                            <Text style={styles.mealMacroText}>•</Text>
+                                            <Text style={styles.mealMacroText}>{Math.round(meal.fat)}g G</Text>
+                                        </View>
+                                    </View>
+                                    <TouchableOpacity
+                                        onPress={() => deleteMeal(meal.id)}
+                                        style={styles.deleteButton}
+                                    >
+                                        <Ionicons name="trash-outline" size={20} color="#ef4444" />
+                                    </TouchableOpacity>
+                                </View>
+                            ))}
+                        </View>
+                    ) : (
+                        <Text style={styles.emptyText}>Nenhuma refeição registrada neste dia</Text>
+                    )}
                 </View>
             </ScrollView>
 
             {/* Edit/Confirm Modal */}
             <Modal visible={showModal} animationType="slide" transparent={true}>
-                <View className="flex-1 justify-end bg-black/50">
-                    <View className="bg-white rounded-t-3xl p-6 h-[70%]">
-                        <View className="flex-row justify-between items-center mb-6">
-                            <Text className="text-xl font-bold">Confirmar Refeição</Text>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Confirmar Refeição</Text>
                             <TouchableOpacity onPress={() => setShowModal(false)}>
                                 <Ionicons name="close" size={24} color="#64748b" />
                             </TouchableOpacity>
@@ -175,45 +312,48 @@ export default function TrackerScreen() {
 
                         {scannedMeal && (
                             <ScrollView>
-                                <View className="bg-green-50 p-4 rounded-xl mb-6 border border-green-100">
-                                    <Text className="text-green-800 font-medium mb-2">IA Identificou:</Text>
-                                    <Text className="text-2xl font-bold text-green-900">{scannedMeal.name}</Text>
-                                    <Text className="text-green-700 mt-1">{scannedMeal.description}</Text>
+                                <View style={styles.aiResultBox}>
+                                    <Text style={styles.aiLabel}>IA Identificou:</Text>
+                                    <TextInput
+                                        style={styles.mealNameInput}
+                                        value={scannedMeal.name}
+                                        onChangeText={(t) => setScannedMeal({ ...scannedMeal, name: t })}
+                                    />
                                 </View>
 
-                                <View className="flex-row flex-wrap gap-4 mb-6">
-                                    <View className="w-[45%] bg-slate-50 p-3 rounded-xl border border-slate-200">
-                                        <Text className="text-slate-500 text-xs uppercase">Calorias</Text>
+                                <View style={styles.macrosInputGrid}>
+                                    <View style={styles.macroInputItem}>
+                                        <Text style={styles.macroInputLabel}>Calorias</Text>
                                         <TextInput
-                                            className="text-xl font-bold text-slate-900"
-                                            value={scannedMeal.calories.toString()}
+                                            style={styles.macroInput}
+                                            value={scannedMeal.calories?.toString()}
                                             onChangeText={(t) => setScannedMeal({ ...scannedMeal, calories: parseInt(t) || 0 })}
                                             keyboardType="numeric"
                                         />
                                     </View>
-                                    <View className="w-[45%] bg-slate-50 p-3 rounded-xl border border-slate-200">
-                                        <Text className="text-slate-500 text-xs uppercase">Proteína (g)</Text>
+                                    <View style={styles.macroInputItem}>
+                                        <Text style={styles.macroInputLabel}>Prot (g)</Text>
                                         <TextInput
-                                            className="text-xl font-bold text-slate-900"
-                                            value={scannedMeal.protein.toString()}
+                                            style={styles.macroInput}
+                                            value={scannedMeal.protein?.toString()}
                                             onChangeText={(t) => setScannedMeal({ ...scannedMeal, protein: parseFloat(t) || 0 })}
                                             keyboardType="numeric"
                                         />
                                     </View>
-                                    <View className="w-[45%] bg-slate-50 p-3 rounded-xl border border-slate-200">
-                                        <Text className="text-slate-500 text-xs uppercase">Carboidratos (g)</Text>
+                                    <View style={styles.macroInputItem}>
+                                        <Text style={styles.macroInputLabel}>Carb (g)</Text>
                                         <TextInput
-                                            className="text-xl font-bold text-slate-900"
-                                            value={scannedMeal.carbs.toString()}
+                                            style={styles.macroInput}
+                                            value={scannedMeal.carbs?.toString()}
                                             onChangeText={(t) => setScannedMeal({ ...scannedMeal, carbs: parseFloat(t) || 0 })}
                                             keyboardType="numeric"
                                         />
                                     </View>
-                                    <View className="w-[45%] bg-slate-50 p-3 rounded-xl border border-slate-200">
-                                        <Text className="text-slate-500 text-xs uppercase">Gorduras (g)</Text>
+                                    <View style={styles.macroInputItem}>
+                                        <Text style={styles.macroInputLabel}>Gord (g)</Text>
                                         <TextInput
-                                            className="text-xl font-bold text-slate-900"
-                                            value={scannedMeal.fat.toString()}
+                                            style={styles.macroInput}
+                                            value={scannedMeal.fat?.toString()}
                                             onChangeText={(t) => setScannedMeal({ ...scannedMeal, fat: parseFloat(t) || 0 })}
                                             keyboardType="numeric"
                                         />
@@ -221,10 +361,10 @@ export default function TrackerScreen() {
                                 </View>
 
                                 <TouchableOpacity
-                                    className="bg-green-600 py-4 rounded-xl items-center mb-4"
+                                    style={styles.confirmButton}
                                     onPress={saveMeal}
                                 >
-                                    <Text className="text-white font-bold text-lg">Confirmar e Salvar</Text>
+                                    <Text style={styles.confirmButtonText}>Confirmar e Salvar</Text>
                                 </TouchableOpacity>
                             </ScrollView>
                         )}
@@ -234,3 +374,240 @@ export default function TrackerScreen() {
         </SafeAreaView>
     );
 }
+
+const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+        backgroundColor: '#f9fafb',
+    },
+    scrollContent: {
+        padding: 20,
+        gap: 16,
+    },
+    header: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    title: {
+        fontSize: 28,
+        fontWeight: 'bold',
+        color: '#1f2937',
+    },
+    scanButton: {
+        backgroundColor: '#22c55e',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 12,
+    },
+    scanButtonText: {
+        color: 'white',
+        fontWeight: 'bold',
+        fontSize: 14,
+    },
+    dateNavigator: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: 'white',
+        padding: 16,
+        borderRadius: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 8,
+        elevation: 2,
+    },
+    dateButton: {
+        padding: 8,
+    },
+    dateDisplay: {
+        alignItems: 'center',
+    },
+    dateText: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1f2937',
+    },
+    dateSubtext: {
+        fontSize: 13,
+        color: '#6b7280',
+        textTransform: 'capitalize',
+    },
+    summaryCard: {
+        backgroundColor: 'white',
+        padding: 20,
+        borderRadius: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 8,
+        elevation: 2,
+    },
+    summaryTitle: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#1f2937',
+        marginBottom: 16,
+    },
+    macrosGrid: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+    },
+    macroItem: {
+        alignItems: 'center',
+    },
+    macroValue: {
+        fontSize: 24,
+        fontWeight: 'bold',
+        color: '#3b82f6',
+    },
+    macroLabel: {
+        fontSize: 12,
+        color: '#6b7280',
+        marginTop: 4,
+    },
+    mealsSection: {
+        gap: 12,
+    },
+    sectionTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1f2937',
+    },
+    mealsList: {
+        gap: 12,
+    },
+    mealCard: {
+        backgroundColor: 'white',
+        padding: 16,
+        borderRadius: 12,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+        elevation: 1,
+    },
+    mealInfo: {
+        flex: 1,
+    },
+    mealName: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#1f2937',
+        marginBottom: 4,
+    },
+    mealTime: {
+        fontSize: 13,
+        color: '#6b7280',
+        marginBottom: 6,
+    },
+    mealMacros: {
+        flexDirection: 'row',
+        gap: 6,
+        flexWrap: 'wrap',
+    },
+    mealMacroText: {
+        fontSize: 12,
+        color: '#3b82f6',
+        fontWeight: '500',
+    },
+    deleteButton: {
+        padding: 8,
+        marginLeft: 8,
+    },
+    emptyText: {
+        textAlign: 'center',
+        color: '#9ca3af',
+        fontSize: 14,
+        paddingVertical: 40,
+    },
+    // Modal Styles
+    modalOverlay: {
+        flex: 1,
+        justifyContent: 'flex-end',
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    },
+    modalContent: {
+        backgroundColor: 'white',
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        padding: 24,
+        maxHeight: '80%',
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 20,
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#1f2937',
+    },
+    aiResultBox: {
+        backgroundColor: '#f0fdf4',
+        padding: 16,
+        borderRadius: 12,
+        marginBottom: 20,
+        borderWidth: 1,
+        borderColor: '#bbf7d0',
+    },
+    aiLabel: {
+        fontSize: 14,
+        color: '#15803d',
+        fontWeight: '600',
+        marginBottom: 8,
+    },
+    mealNameInput: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#166534',
+        padding: 0,
+    },
+    macrosInputGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 12,
+        marginBottom: 20,
+    },
+    macroInputItem: {
+        width: '47%',
+        backgroundColor: '#f9fafb',
+        padding: 12,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#e5e7eb',
+    },
+    macroInputLabel: {
+        fontSize: 11,
+        color: '#6b7280',
+        textTransform: 'uppercase',
+        marginBottom: 4,
+    },
+    macroInput: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1f2937',
+        padding: 0,
+    },
+    confirmButton: {
+        backgroundColor: '#22c55e',
+        paddingVertical: 16,
+        borderRadius: 12,
+        alignItems: 'center',
+    },
+    confirmButtonText: {
+        color: 'white',
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
+});

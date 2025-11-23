@@ -1,7 +1,7 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useState } from 'react';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function PlansScreen() {
     const [selectedPlan, setSelectedPlan] = useState<'monthly' | 'annual'>('annual');
@@ -40,7 +40,7 @@ export default function PlansScreen() {
             <ScrollView contentContainerStyle={styles.scrollContent}>
                 <Text style={styles.title}>Escolha seu Plano</Text>
                 <Text style={styles.subtitle}>
-                    Desbloqueie todo o potencial do FitPantry
+                    Desbloqueie todo o potencial do FitBody AI
                 </Text>
 
                 {plans.map((plan) => (

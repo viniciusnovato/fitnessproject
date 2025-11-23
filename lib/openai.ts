@@ -23,7 +23,9 @@ const CACHE_TTL = {
  * Gera insights de progresso de peso
  * Com cache de 7 dias (weight data changes frequently)
  */
-export async function generateInsights(profile: any, weightHistory: any[], userId: string): Promise<any> {
+export async function generateGoalInsights(profile: any, weightHistory: any[], userId: string): Promise<any> {
+    console.log('Generating Goal Insights for user:', userId);
+    console.log('Weight History Length:', weightHistory.length);
     if (!profile || weightHistory.length === 0) return null;
 
     const currentWeight = weightHistory[0].weight;
@@ -54,7 +56,7 @@ export async function generateInsights(profile: any, weightHistory: any[], userI
         'insight',
         { profile, weightHistory },
         async () => {
-            const systemPrompt = `Atue como um nutricionista e coach fitness especialista e motivador do app FitPantry.
+            const systemPrompt = `Atue como um nutricionista e coach fitness especialista e motivador do app FitBody AI.
 Analise o progresso do usuário e forneça um insight curto, direto e personalizado.
 Sempre retorne um JSON válido.`;
 
@@ -499,21 +501,54 @@ export async function analyzeMealImage(base64Image: string, userId: string): Pro
         'meal_image',
         { imagePreview: base64Image.substring(0, 50) + '...' }, // Don't store full image in params
         async () => {
-            const systemPrompt = `Você é um nutricionista especialista em análise visual de pratos.
-Analise a imagem da refeição e forneça uma estimativa nutricional detalhada.
+            const systemPrompt = `Você é um nutricionista brasileiro especialista em análise visual de pratos e estimativa de porções.
+Sua tarefa é analisar fotos de refeições e fornecer estimativas PRECISAS de peso e valores nutricionais.
+Use referências visuais comuns (tamanho do prato, talheres, mãos) para estimar porções.
 Sempre retorne um JSON válido.`;
 
-            const userPrompt = `Analise esta foto de comida e retorne um JSON com:
-    {
-        "name": "Nome do prato (seja específico)",
-        "description": "Breve descrição dos componentes visíveis",
-        "calories": estimativa de calorias totais (inteiro),
-        "protein": estimativa de proteína em g (número),
-        "carbs": estimativa de carboidratos em g (número),
-        "fat": estimativa de gorduras em g (número),
-        "confidence": "alta" | "média" | "baixa"
-    }
-    Se não for comida, retorne { "error": "Não identifiquei comida nesta imagem" }.`;
+            const userPrompt = `Analise esta foto de comida e retorne um JSON DETALHADO com:
+
+CONTEXTO DE PORÇÕES PADRÃO BRASILEIRAS (use como referência):
+- 1 concha de arroz = 100g
+- 1 concha de feijão = 80g  
+- 1 filé de frango (peito) = 120-150g
+- 1 bife médio = 100-120g
+- 1 ovo = 50g
+- 1 batata média = 150g
+- 1 colher de sopa de azeite = 10ml
+- 1 pão francês = 50g
+- 1 fatia de queijo = 20g
+
+INSTRUÇÕES:
+1. Identifique CADA componente visível no prato
+2. Estime o PESO EM GRAMAS de cada componente usando referências visuais
+3. Calcule calorias e macros baseado nos pesos estimados
+4. Seja conservador nas estimativas (melhor subestimar que superestimar)
+
+RETORNE JSON:
+{
+    "name": "Nome do prato completo",
+    "description": "Descrição breve dos componentes",
+    "portionSize": "pequena" | "média" | "grande",
+    "components": [
+        {
+            "food": "nome do alimento",
+            "estimatedWeight": peso em gramas (número),
+            "unit": "g",
+            "calories": calorias deste componente,
+            "protein": proteína em g,
+            "carbs": carboidratos em g,
+            "fat": gordura em g
+        }
+    ],
+    "calories": total de calorias (soma dos components),
+    "protein": total de proteína em g,
+    "carbs": total de carboidratos em g,
+    "fat": total de gorduras em g,
+    "confidence": "alta" | "média" | "baixa"
+}
+
+Se não for comida, retorne { "error": "Não identifiquei comida nesta imagem" }.`;
 
             const response = await callOpenAI({
                 model: 'gpt-4o-mini', // Vision capable model
@@ -533,7 +568,7 @@ Sempre retorne um JSON válido.`;
                         ] as any // Cast to any to avoid TS issues with simple types
                     },
                 ],
-                max_tokens: 500,
+                max_tokens: 1000, // Increased for detailed component breakdown
             });
 
             try {
@@ -554,13 +589,182 @@ Sempre retorne um JSON válido.`;
 }
 
 /**
+ * Analisa múltiplas imagens de refeição com contexto adicional
+ * Suporta: múltiplas fotos (prato + tabela nutricional), descrição do usuário, bebidas e suplementos
+ */
+export async function analyzeMealWithContext(params: {
+    images: string[]; // Array de base64 images
+    description?: string; // Descrição opcional do usuário
+    mealTypes: string[]; // ['meal', 'drink', 'supplement']
+    userId: string;
+}): Promise<any> {
+    // Gera chave de cache baseada em todas as imagens + descrição
+    const imagesHash = params.images.map(img => img.substring(0, 50)).join('|');
+    const cacheKey = await generateCacheKey('meal_image', {
+        imagesHash,
+        description: params.description || '',
+        mealTypes: params.mealTypes.sort().join(',')
+    });
+
+    // Usa cache wrapper (sem TTL = permanente)
+    const result = await withCache(
+        cacheKey,
+        params.userId,
+        'meal_image',
+        {
+            imageCount: params.images.length,
+            hasDescription: !!params.description,
+            mealTypes: params.mealTypes
+        },
+        async () => {
+            const systemPrompt = `Você é um nutricionista brasileiro especialista em análise visual de alimentos e leitura de tabelas nutricionais.
+Sua tarefa é analisar TODAS as imagens fornecidas e fornecer estimativas PRECISAS de peso e valores nutricionais.
+PRIORIDADE: Se houver tabela nutricional, use os valores EXATOS dela.
+Sempre retorne um JSON válido.`;
+
+            // Build type context
+            const typeContext = params.mealTypes.includes('drink')
+                ? 'Isso pode incluir BEBIDAS (sucos, shakes, refrigerantes, etc.).'
+                : params.mealTypes.includes('supplement')
+                    ? 'Isso pode incluir SUPLEMENTOS (whey protein, creatina, vitaminas, etc.).'
+                    : 'Isso é uma REFEIÇÃO sólida.';
+
+            const userPrompt = `Analise TODAS as ${params.images.length} imagens fornecidas e retorne um JSON DETALHADO.
+
+${typeContext}
+
+${params.description ? `DESCRIÇÃO DO USUÁRIO: "${params.description}"
+Use esta descrição para complementar a análise visual.` : ''}
+
+INSTRUÇÕES CRÍTICAS:
+1. Se houver TABELA NUTRICIONAL em alguma imagem:
+   - Use os valores EXATOS da tabela (calorias, proteínas, carboidratos, gorduras)
+   - Identifique a porção indicada na tabela
+   - Priorize esses dados sobre estimativas visuais
+
+2. Se NÃO houver tabela nutricional:
+   - Use as referências de porções brasileiras
+   - Estime o peso de cada componente
+   - Calcule macros baseado nos pesos
+
+3. Para BEBIDAS:
+   - Estime volume em ml
+   - Considere açúcar, proteína (se shake), etc.
+
+4. Para SUPLEMENTOS:
+   - Identifique o tipo (whey, creatina, etc.)
+   - Use porção padrão (ex: 1 scoop whey = 30g)
+   - Se houver embalagem visível, use info dela
+
+CONTEXTO DE PORÇÕES PADRÃO BRASILEIRAS:
+- 1 concha de arroz = 100g
+- 1 concha de feijão = 80g  
+- 1 filé de frango (peito) = 120-150g
+- 1 bife médio = 100-120g
+- 1 ovo = 50g
+- 1 batata média = 150g
+- 1 scoop whey protein = 30g
+- 1 copo de suco = 200ml
+- 1 banana = 100g
+
+RETORNE JSON:
+{
+    "name": "Nome do item (ex: Frango grelhado com arroz e feijão)",
+    "description": "Descrição dos componentes",
+    "portionSize": "pequena" | "média" | "grande",
+    "hasNutritionLabel": true | false,
+    "components": [
+        {
+            "food": "nome do alimento",
+            "estimatedWeight": peso em gramas ou ml (número),
+            "unit": "g" | "ml",
+            "calories": calorias deste componente,
+            "protein": proteína em g,
+            "carbs": carboidratos em g,
+            "fat": gordura em g
+        }
+    ],
+    "calories": total de calorias,
+    "protein": total de proteína em g,
+    "carbs": total de carboidratos em g,
+    "fat": total de gorduras em g,
+    "confidence": "alta" | "média" | "baixa",
+    "notes": "Observações adicionais (ex: valores da tabela nutricional, ajustes feitos)"
+}
+
+Se não for comida/bebida/suplemento, retorne { "error": "Não identifiquei alimento nesta imagem" }.`;
+
+            // Build content array with text + all images
+            const content: any[] = [
+                { type: 'text', text: userPrompt }
+            ];
+
+            // Add all images
+            params.images.forEach((base64Image, index) => {
+                content.push({
+                    type: 'image_url',
+                    image_url: {
+                        url: `data:image/jpeg;base64,${base64Image}`,
+                        detail: 'high'
+                    }
+                });
+            });
+
+            const response = await callOpenAI({
+                model: 'gpt-4o-mini', // Vision capable model
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    {
+                        role: 'user',
+                        content: content as any // Cast to any to support multiple images
+                    },
+                ],
+                max_tokens: 1500, // Increased for multiple images + detailed breakdown
+            });
+
+            try {
+                const jsonMatch = response.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    return JSON.parse(jsonMatch[0]);
+                }
+                return JSON.parse(response);
+            } catch (error) {
+                console.error('Erro ao parsear análise de imagem:', error);
+                return null;
+            }
+        },
+        CACHE_TTL.MEAL_IMAGE // null = permanent
+    );
+
+    return result.data;
+}
+
+
+/**
  * Analisa uma imagem da despensa/geladeira para identificar ingredientes
  */
 export async function analyzePantryImage(base64Image: string): Promise<string[]> {
-    const systemPrompt = `Você é um assistente que identifica ingredientes alimentares em fotos.
-Liste APENAS os ingredientes comestíveis visíveis. Ignorar embalagens não alimentícias.`;
+    const systemPrompt = `Você é um assistente especializado em identificar alimentos e produtos alimentícios em fotos de despensa/geladeira.
+Seja ESPECÍFICO com produtos industrializados: identifique marcas, tipos e sabores quando visíveis.
+Liste APENAS os ingredientes e produtos comestíveis visíveis.`;
 
-    const userPrompt = `Liste os ingredientes nesta foto. Retorne apenas um array JSON de strings em português, ex: ["arroz", "feijão", "leite"].`;
+    const userPrompt = `Analise esta foto de despensa/geladeira e liste TODOS os produtos alimentícios visíveis.
+
+INSTRUÇÕES IMPORTANTES:
+1. Para produtos INDUSTRIALIZADOS (bolachas, salgadinhos, biscoitos, etc.):
+   - Identifique a MARCA se visível (ex: "Oreo", "Doritos", "Ruffles")
+   - Identifique o TIPO específico (ex: "bolacha recheada", "salgadinho de queijo", "biscoito wafer")
+   - Identifique o SABOR se visível (ex: "chocolate", "queijo", "morango")
+   - Exemplo: "Oreo Original", "Doritos Nacho", "Ruffles Queijo"
+
+2. Para ingredientes NATURAIS:
+   - Use nomes genéricos (ex: "arroz", "feijão", "tomate")
+
+3. Para produtos EMBALADOS sem marca visível:
+   - Descreva o tipo (ex: "bolacha água e sal", "macarrão espaguete", "leite integral")
+
+RETORNE apenas um array JSON de strings em português.
+Exemplo: ["Oreo Original", "arroz branco", "feijão preto", "Doritos Nacho", "leite integral", "tomate"]`;
 
     const response = await callOpenAI({
         model: 'gpt-4o-mini',
@@ -580,7 +784,7 @@ Liste APENAS os ingredientes comestíveis visíveis. Ignorar embalagens não ali
                 ] as any
             },
         ],
-        max_tokens: 500,
+        max_tokens: 800, // Increased for detailed product names
     });
 
     try {
@@ -893,6 +1097,16 @@ export async function normalizeIngredients(text: string): Promise<IngredientPars
        - Primeira letra maiúscula.
     5. Se a quantidade não for especificada, use null.
     6. Se a unidade não for especificada, use null.
+    
+    CATEGORIZAÇÃO CORRETA (IMPORTANTE):
+    - CARBOIDRATO: Arroz, Macarrão, Pão, Batata, Mandioca, Aveia, Feijão, Lentilha, Grão-de-bico, Ervilha
+    - PROTEÍNA: Frango, Carne, Peixe, Ovo, Camarão, Atum (apenas proteínas animais puras)
+    - VEGETAL: Tomate, Alface, Cenoura, Brócolis, Couve, Cebola, Alho
+    - FRUTA: Banana, Maçã, Laranja, Morango, Abacaxi
+    - LATICÍNIO: Leite, Queijo, Iogurte, Requeijão
+    - TEMPERO: Sal, Pimenta, Orégano, Cominho, Alho em pó
+    
+    ATENÇÃO: Feijão, Lentilha, Grão-de-bico e Ervilha são CARBOIDRATOS, não proteínas!
     `;
 
     try {
@@ -943,11 +1157,20 @@ export async function recognizeIngredientsFromImage(params: {
     Ignore itens não comestíveis.
     
     REGRAS CRÍTICAS:
-    1. Para cada item, estime a categoria (Proteína, Carbo, Vegetal, Fruta, Laticínio, Tempero, Outros).
+    1. Para cada item, estime a categoria (Proteína, Carboidrato, Vegetal, Fruta, Laticínio, Tempero, Outros).
     2. PADRONIZAÇÃO DE NOMES (IMPORTANTE):
        - Use SEMPRE o SINGULAR (ex: "Banana" e não "Bananas").
        - Use nomes genéricos (ex: "Maçã" e não "Maçã Fuji").
     3. Se possível, estime quantidade visual grosseira, senão deixe null.
+    
+    CATEGORIZAÇÃO CORRETA:
+    - CARBOIDRATO: Arroz, Macarrão, Pão, Batata, Mandioca, Aveia, Feijão, Lentilha, Grão-de-bico, Ervilha
+    - PROTEÍNA: Frango, Carne, Peixe, Ovo, Camarão, Atum (apenas proteínas animais puras)
+    - VEGETAL: Tomate, Alface, Cenoura, Brócolis, Couve, Cebola, Alho
+    - FRUTA: Banana, Maçã, Laranja, Morango, Abacaxi
+    - LATICÍNIO: Leite, Queijo, Iogurte, Requeijão
+    
+    ATENÇÃO: Feijão e leguminosas são CARBOIDRATOS, não proteínas!
     
     Retorne APENAS JSON:
     {
@@ -955,7 +1178,6 @@ export async function recognizeIngredientsFromImage(params: {
         { "name": "Banana", "quantity": "6", "unit": "un", "category": "Fruta" }
       ]
     }`;
-
     try {
         const response = await retryWithBackoff(async () => {
             // OPENAI_API_KEY is assumed to be available in the scope or passed via process.env

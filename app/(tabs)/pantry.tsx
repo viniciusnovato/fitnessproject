@@ -26,6 +26,10 @@ export default function PantryScreen() {
     const [loading, setLoading] = useState(true);
     const [showCaptureMenu, setShowCaptureMenu] = useState(false);
 
+    // Filter and Search State
+    const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+    const [searchQuery, setSearchQuery] = useState('');
+
     // Text Input State
     const [showTextModal, setShowTextModal] = useState(false);
     const [textInput, setTextInput] = useState('');
@@ -432,8 +436,21 @@ export default function PantryScreen() {
         }
     };
 
+    // Filter and search items
+    const filteredItems = items.filter(item => {
+        // Filter by category
+        if (selectedCategory && item.category !== selectedCategory) {
+            return false;
+        }
+        // Filter by search query
+        if (searchQuery && !item.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+            return false;
+        }
+        return true;
+    });
+
     // Agrupar itens por categoria
-    const groupedItems = items.reduce((acc, item) => {
+    const groupedItems = filteredItems.reduce((acc, item) => {
         const cat = item.category || 'Outros';
         if (!acc[cat]) acc[cat] = [];
         acc[cat].push(item);
@@ -441,19 +458,98 @@ export default function PantryScreen() {
     }, {} as Record<string, PantryItem[]>);
 
     const categories = Object.keys(groupedItems).sort();
+    const allCategories = Array.from(new Set(items.map(i => i.category || 'Outros'))).sort();
 
     const availableCount = items.filter(i => i.status === 'in_stock').length;
+    const runningLowCount = items.filter(i => i.status === 'running_low').length;
     const selectedCount = selectedItems.size;
 
     return (
-        <SafeAreaView style={styles.container}>
+        <SafeAreaView style={styles.container} edges={['top']}>
             <View style={styles.header}>
-                <Text style={styles.title}>Minha Despensa</Text>
-                <Text style={styles.subtitle}>{items.length} ingredientes • {categories.length} categorias</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <Text style={styles.title}>Minha Despensa</Text>
+                    <TouchableOpacity onPress={() => setShowCaptureMenu(true)}>
+                        <Ionicons name="add-circle" size={32} color="#16a34a" />
+                    </TouchableOpacity>
+                </View>
+                <View style={styles.statsRow}>
+                    <View style={styles.statItem}>
+                        <Text style={styles.statValue}>{items.length}</Text>
+                        <Text style={styles.statLabel}>Total</Text>
+                    </View>
+                    <View style={styles.statDivider} />
+                    <View style={styles.statItem}>
+                        <Text style={[styles.statValue, { color: '#22c55e' }]}>{availableCount}</Text>
+                        <Text style={styles.statLabel}>Disponíveis</Text>
+                    </View>
+                    {runningLowCount > 0 && (
+                        <>
+                            <View style={styles.statDivider} />
+                            <View style={styles.statItem}>
+                                <Text style={[styles.statValue, { color: '#f59e0b' }]}>{runningLowCount}</Text>
+                                <Text style={styles.statLabel}>Acabando</Text>
+                            </View>
+                        </>
+                    )}
+                </View>
             </View>
 
+            {/* Search Bar */}
+            <View style={styles.searchContainer}>
+                <Ionicons name="search" size={20} color="#9ca3af" style={styles.searchIcon} />
+                <TextInput
+                    style={styles.searchInput}
+                    placeholder="Buscar ingredientes..."
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    placeholderTextColor="#9ca3af"
+                />
+                {searchQuery.length > 0 && (
+                    <TouchableOpacity onPress={() => setSearchQuery('')}>
+                        <Ionicons name="close-circle" size={20} color="#9ca3af" />
+                    </TouchableOpacity>
+                )}
+            </View>
+
+            {/* Category Filters */}
+            <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.filtersContainer}
+                contentContainerStyle={styles.filtersContent}
+            >
+                <TouchableOpacity
+                    style={[styles.filterChip, !selectedCategory && styles.filterChipActive]}
+                    onPress={() => setSelectedCategory(null)}
+                >
+                    <Text style={[styles.filterChipText, !selectedCategory && styles.filterChipTextActive]}>
+                        Todos
+                    </Text>
+                </TouchableOpacity>
+                {allCategories.map(cat => (
+                    <TouchableOpacity
+                        key={cat}
+                        style={[styles.filterChip, selectedCategory === cat && styles.filterChipActive]}
+                        onPress={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
+                    >
+                        <Text style={[styles.filterChipText, selectedCategory === cat && styles.filterChipTextActive]}>
+                            {cat}
+                        </Text>
+                    </TouchableOpacity>
+                ))}
+            </ScrollView>
+
             <ScrollView contentContainerStyle={styles.scrollContent}>
-                {items.length === 0 ? (
+                {filteredItems.length === 0 && items.length > 0 ? (
+                    <View style={styles.emptyState}>
+                        <Text style={styles.emptyIcon}>🔍</Text>
+                        <Text style={styles.emptyStateTitle}>Nenhum resultado</Text>
+                        <Text style={styles.emptyStateText}>
+                            Não encontramos ingredientes com esses filtros
+                        </Text>
+                    </View>
+                ) : items.length === 0 ? (
                     <View style={styles.emptyState}>
                         <Text style={styles.emptyIcon}>🥘</Text>
                         <Text style={styles.emptyStateTitle}>Despensa vazia</Text>
@@ -539,13 +635,8 @@ export default function PantryScreen() {
                 </View>
             </View>
 
-            {/* Floating Action Button - Dynamic Position */}
-            <TouchableOpacity
-                style={[styles.fab, items.length > 0 ? { bottom: 100 } : { bottom: 20 }]}
-                onPress={() => setShowCaptureMenu(true)}
-            >
-                <Ionicons name="add" size={32} color="white" />
-            </TouchableOpacity>
+            {/* Floating Action Button - REMOVED */}
+
 
             {/* Capture Menu Modal */}
             <Modal visible={showCaptureMenu} transparent animationType="fade">
@@ -1210,7 +1301,6 @@ const styles = StyleSheet.create({
         backgroundColor: 'white',
         borderTopWidth: 1,
         borderTopColor: '#e5e7eb',
-        paddingBottom: 34, // Safe area padding
         paddingTop: 16,
         paddingHorizontal: 20,
         shadowColor: '#000',
@@ -1375,5 +1465,75 @@ const styles = StyleSheet.create({
     unitChipTextSelected: {
         color: '#2563eb',
         fontWeight: '600',
+    },
+    // Stats Row Styles
+    statsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 12,
+        gap: 16,
+    },
+    statItem: {
+        alignItems: 'center',
+    },
+    statDivider: {
+        width: 1,
+        height: 24,
+        backgroundColor: '#e5e7eb',
+    },
+    // Search Styles
+    searchContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'white',
+        marginHorizontal: 20,
+        marginBottom: 12,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#e5e7eb',
+    },
+    searchIcon: {
+        marginRight: 8,
+    },
+    searchInput: {
+        flex: 1,
+        fontSize: 16,
+        color: '#1f2937',
+    },
+    // Filter Styles
+    filtersContainer: {
+        marginBottom: 16,
+        height: 50, // Fixed height for scroll container
+    },
+    filtersContent: {
+        paddingHorizontal: 20,
+        paddingRight: 60,
+        alignItems: 'center', // Center items vertically
+    },
+    filterChip: {
+        paddingHorizontal: 16,
+        height: 36, // Fixed height for chips
+        borderRadius: 18,
+        backgroundColor: '#f3f4f6',
+        borderWidth: 1,
+        borderColor: '#e5e7eb',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 8,
+    },
+    filterChipActive: {
+        backgroundColor: '#22c55e',
+        borderColor: '#22c55e',
+    },
+    filterChipText: {
+        fontSize: 14,
+        color: '#4b5563', // Darker gray for better contrast
+        fontWeight: '600',
+    },
+    filterChipTextActive: {
+        color: 'white',
+        fontWeight: '700',
     },
 });
