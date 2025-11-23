@@ -179,18 +179,26 @@ export default function HomeScreen() {
     }
   };
 
-  const handleCameraCapture = async () => {
+  const handleMealCapture = async (mode: 'camera' | 'text') => {
     // Show help modal first time (unless user opted out)
-    if (!dontShowPhotoHelp) {
+    if (!dontShowPhotoHelp && mode === 'camera') {
       setShowPhotoHelpModal(true);
       return;
     }
 
+    if (mode === 'text') {
+      setCapturedImages([]);
+      setUserDescription('');
+      setMealTypes(new Set(['meal']));
+      setShowEnhancedModal(true);
+      return;
+    }
+
     // Proceed directly to camera
-    await takePicture();
+    await startCaptureFlow();
   };
 
-  const takePicture = async () => {
+  const startCaptureFlow = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permissão necessária', 'Precisamos de acesso à câmera para analisar sua comida.');
@@ -273,8 +281,8 @@ export default function HomeScreen() {
   };
 
   const analyzeWithContext = async () => {
-    if (capturedImages.length === 0) {
-      Alert.alert('Erro', 'Adicione pelo menos uma foto.');
+    if (capturedImages.length === 0 && !userDescription.trim()) {
+      Alert.alert('Erro', 'Adicione pelo menos uma foto ou uma descrição.');
       return;
     }
 
@@ -585,7 +593,7 @@ export default function HomeScreen() {
         <View style={styles.actionsContainer}>
           <TouchableOpacity
             style={styles.actionButton}
-            onPress={handleCameraCapture}
+            onPress={() => handleMealCapture('camera')}
             disabled={analyzing}
           >
             {analyzing ? (
@@ -593,6 +601,14 @@ export default function HomeScreen() {
             ) : (
               <Text style={styles.actionButtonText}>📸 Registrar por Foto</Text>
             )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: '#8b5cf6' }]}
+            onPress={() => handleMealCapture('text')}
+            disabled={analyzing}
+          >
+            <Text style={styles.actionButtonText}>📝 Registrar por Texto</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.actionButton, { backgroundColor: '#3b82f6' }]}
@@ -658,7 +674,7 @@ export default function HomeScreen() {
               style={styles.helpOkButton}
               onPress={() => {
                 setShowPhotoHelpModal(false);
-                takePicture();
+                startCaptureFlow();
               }}
             >
               <Text style={styles.helpOkButtonText}>Entendi, vamos lá!</Text>

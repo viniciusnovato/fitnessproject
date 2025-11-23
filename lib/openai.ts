@@ -593,13 +593,21 @@ Se não for comida, retorne { "error": "Não identifiquei comida nesta imagem" }
  * Suporta: múltiplas fotos (prato + tabela nutricional), descrição do usuário, bebidas e suplementos
  */
 export async function analyzeMealWithContext(params: {
-    images: string[]; // Array de base64 images
-    description?: string; // Descrição opcional do usuário
+    images: string[]; // Array de base64 images (pode ser vazio)
+    description?: string; // Descrição opcional do usuário (obrigatória se não houver imagens)
     mealTypes: string[]; // ['meal', 'drink', 'supplement']
     userId: string;
 }): Promise<any> {
+    // Validação básica
+    if (params.images.length === 0 && !params.description) {
+        throw new Error('É necessário fornecer pelo menos uma imagem ou uma descrição.');
+    }
+
     // Gera chave de cache baseada em todas as imagens + descrição
-    const imagesHash = params.images.map(img => img.substring(0, 50)).join('|');
+    const imagesHash = params.images.length > 0
+        ? params.images.map(img => img.substring(0, 50)).join('|')
+        : 'no-images';
+
     const cacheKey = await generateCacheKey('meal_image', {
         imagesHash,
         description: params.description || '',
@@ -617,9 +625,9 @@ export async function analyzeMealWithContext(params: {
             mealTypes: params.mealTypes
         },
         async () => {
-            const systemPrompt = `Você é um nutricionista brasileiro especialista em análise visual de alimentos e leitura de tabelas nutricionais.
-Sua tarefa é analisar TODAS as imagens fornecidas e fornecer estimativas PRECISAS de peso e valores nutricionais.
-PRIORIDADE: Se houver tabela nutricional, use os valores EXATOS dela.
+            const systemPrompt = `Você é um nutricionista brasileiro especialista em análise de alimentos.
+Sua tarefa é analisar as informações fornecidas (imagens e/ou descrição) e fornecer estimativas PRECISAS de peso e valores nutricionais.
+PRIORIDADE: Se houver tabela nutricional nas imagens, use os valores EXATOS dela.
 Sempre retorne um JSON válido.`;
 
             // Build type context
@@ -629,7 +637,12 @@ Sempre retorne um JSON válido.`;
                     ? 'Isso pode incluir SUPLEMENTOS (whey protein, creatina, vitaminas, etc.).'
                     : 'Isso é uma REFEIÇÃO sólida.';
 
-            const userPrompt = `Analise TODAS as ${params.images.length} imagens fornecidas e retorne um JSON DETALHADO.
+            const hasImages = params.images.length > 0;
+
+            let userPrompt = '';
+
+            if (hasImages) {
+                userPrompt = `Analise TODAS as ${params.images.length} imagens fornecidas e retorne um JSON DETALHADO.
 
 ${typeContext}
 
@@ -645,70 +658,65 @@ INSTRUÇÕES CRÍTICAS:
 2. Se NÃO houver tabela nutricional:
    - Use as referências de porções brasileiras
    - Estime o peso de cada componente
-   - Calcule macros baseado nos pesos
+   - Calcule macros baseado nos pesos`;
+            } else {
+                // Text only prompt
+                userPrompt = `Analise a seguinte descrição de refeição e retorne um JSON DETALHADO com estimativas nutricionais.
+
+${typeContext}
+
+DESCRIÇÃO DO USUÁRIO: "${params.description}"
+
+INSTRUÇÕES CRÍTICAS:
+1. Estime porções realistas baseadas na descrição (padrão brasileiro).
+2. Se a quantidade não for especificada, assuma uma porção média padrão.
+3. Calcule macros e calorias com base nessas estimativas.`;
+            }
+
+            userPrompt += `
 
 3. Para BEBIDAS:
-   - Estime volume em ml
-   - Considere açúcar, proteína (se shake), etc.
+   - Se for suco/refrigerante, estime o açúcar/carboidratos corretamente
+   - Se for bebida alcoólica, inclua as calorias do álcool
 
-4. Para SUPLEMENTOS:
-   - Identifique o tipo (whey, creatina, etc.)
-   - Use porção padrão (ex: 1 scoop whey = 30g)
-   - Se houver embalagem visível, use info dela
-
-CONTEXTO DE PORÇÕES PADRÃO BRASILEIRAS:
-- 1 concha de arroz = 100g
-- 1 concha de feijão = 80g  
-- 1 filé de frango (peito) = 120-150g
-- 1 bife médio = 100-120g
-- 1 ovo = 50g
-- 1 batata média = 150g
-- 1 scoop whey protein = 30g
-- 1 copo de suco = 200ml
-- 1 banana = 100g
-
-RETORNE JSON:
+FORMATO DE RESPOSTA (JSON):
 {
-    "name": "Nome do item (ex: Frango grelhado com arroz e feijão)",
-    "description": "Descrição dos componentes",
-    "portionSize": "pequena" | "média" | "grande",
-    "hasNutritionLabel": true | false,
-    "components": [
-        {
-            "food": "nome do alimento",
-            "estimatedWeight": peso em gramas ou ml (número),
-            "unit": "g" | "ml",
-            "calories": calorias deste componente,
-            "protein": proteína em g,
-            "carbs": carboidratos em g,
-            "fat": gordura em g
-        }
-    ],
-    "calories": total de calorias,
-    "protein": total de proteína em g,
-    "carbs": total de carboidratos em g,
-    "fat": total de gorduras em g,
-    "confidence": "alta" | "média" | "baixa",
-    "notes": "Observações adicionais (ex: valores da tabela nutricional, ajustes feitos)"
-}
-
-Se não for comida/bebida/suplemento, retorne { "error": "Não identifiquei alimento nesta imagem" }.`;
+  "name": "Nome curto e descritivo da refeição (Ex: Almoço: Arroz, Feijão e Frango)",
+  "calories": 0,
+  "protein": 0,
+  "carbs": 0,
+  "fats": 0,
+  "items": [
+    {
+      "name": "Nome do item (Ex: Arroz Branco)",
+      "portion": "Estimativa de porção (Ex: 4 colheres de sopa / 100g)",
+      "calories": 0,
+      "protein": 0,
+      "carbs": 0,
+      "fats": 0
+    }
+  ],
+  "confidence": "high" | "medium" | "low",
+  "tips": "Dica curta nutricional sobre a refeição (max 1 frase)"
+}`;
 
             // Build content array with text + all images
             const content: any[] = [
                 { type: 'text', text: userPrompt }
             ];
 
-            // Add all images
-            params.images.forEach((base64Image, index) => {
-                content.push({
-                    type: 'image_url',
-                    image_url: {
-                        url: `data:image/jpeg;base64,${base64Image}`,
-                        detail: 'high'
-                    }
+            // Add images if present
+            if (hasImages) {
+                params.images.forEach(base64Image => {
+                    content.push({
+                        type: 'image_url',
+                        image_url: {
+                            url: `data:image/jpeg;base64,${base64Image}`,
+                            detail: 'high'
+                        }
+                    });
                 });
-            });
+            }
 
             const response = await callOpenAI({
                 model: 'gpt-4o-mini', // Vision capable model
