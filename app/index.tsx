@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { Link, router } from 'expo-router';
+import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ImageBackground, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
@@ -39,12 +39,6 @@ export default function WelcomeScreen() {
                     >
                         <Text style={styles.secondaryButtonText}>Já tenho conta</Text>
                     </TouchableOpacity>
-
-                    <Link href="/(tabs)/home" asChild>
-                        <TouchableOpacity style={styles.devLink}>
-                            <Text style={styles.devLinkText}>Entrar como visitante (Dev)</Text>
-                        </TouchableOpacity>
-                    </Link>
                 </View>
             </LinearGradient>
         </ImageBackground>
@@ -110,13 +104,5 @@ const styles = StyleSheet.create({
         color: 'white',
         fontWeight: '600',
         fontSize: 18,
-    },
-    devLink: {
-        marginTop: 16,
-        alignItems: 'center',
-    },
-    devLinkText: {
-        color: 'rgba(255,255,255,0.4)',
-        fontSize: 14,
     },
 });

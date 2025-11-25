@@ -121,6 +121,68 @@ Sempre retorne um JSON válido.`;
 }
 
 /**
+ * Chat genérico com o assistente
+ */
+export async function chatWithAssistant(messages: { role: string; content: string }[]): Promise<string> {
+    const systemPrompt = `Você é o FitBody AI, um assistente pessoal de fitness e nutrição altamente motivador e conhecedor.
+    Seu objetivo é ajudar o usuário a atingir seus objetivos de saúde, respondendo dúvidas sobre dieta, treino, receitas e nutrição.
+    Seja conciso, amigável e use emojis ocasionalmente.
+    Responda sempre em português do Brasil.`;
+
+    const response = await callOpenAI({
+        messages: [
+            { role: 'system', content: systemPrompt },
+            ...messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+        ],
+        temperature: 0.7,
+        max_tokens: 500,
+    });
+
+    return response;
+}
+
+/**
+ * Transcreve áudio usando OpenAI Whisper
+ */
+export async function transcribeAudio(uri: string): Promise<string> {
+    if (!OPENAI_API_KEY) {
+        throw new Error('OpenAI API key not configured');
+    }
+
+    try {
+        const formData = new FormData();
+        formData.append('file', {
+            uri,
+            name: 'audio.m4a',
+            type: 'audio/m4a',
+        } as any);
+        formData.append('model', 'whisper-1');
+        formData.append('language', 'pt');
+
+        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                // Content-Type is handled automatically by FormData
+            },
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Whisper API error:', response.status, errorText);
+            throw new Error(`Whisper API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        return data.text;
+    } catch (error) {
+        console.error('Error transcribing audio:', error);
+        throw error;
+    }
+}
+
+/**
  * Retry a function with exponential backoff
  */
 async function retryWithBackoff<T>(
@@ -499,7 +561,7 @@ export async function analyzeMealImage(base64Image: string, userId: string): Pro
         cacheKey,
         userId,
         'meal_image',
-        { imagePreview: base64Image.substring(0, 50) + '...' }, // Don't store full image in params
+        { imagePreview: base64Image }, // Store full image for admin dashboard
         async () => {
             const systemPrompt = `Você é um nutricionista brasileiro especialista em análise visual de pratos e estimativa de porções.
 Sua tarefa é analisar fotos de refeições e fornecer estimativas PRECISAS de peso e valores nutricionais.
@@ -614,15 +676,15 @@ export async function analyzeMealWithContext(params: {
         mealTypes: params.mealTypes.sort().join(',')
     });
 
-    // Usa cache wrapper (sem TTL = permanente)
     const result = await withCache(
         cacheKey,
         params.userId,
         'meal_image',
         {
-            imageCount: params.images.length,
+            images: params.images, // Store full images for admin dashboard
             hasDescription: !!params.description,
-            mealTypes: params.mealTypes
+            mealTypes: params.mealTypes,
+            description: params.description
         },
         async () => {
             const systemPrompt = `Você é um nutricionista brasileiro especialista em análise de alimentos.
@@ -738,13 +800,14 @@ FORMATO DE RESPOSTA (JSON):
                 return JSON.parse(response);
             } catch (error) {
                 console.error('Erro ao parsear análise de imagem:', error);
-                return null;
+                throw new Error('Erro ao processar análise da refeição');
             }
         },
         CACHE_TTL.MEAL_IMAGE // null = permanent
     );
 
     return result.data;
+
 }
 
 

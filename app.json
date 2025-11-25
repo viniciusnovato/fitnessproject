@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "FitBody AI",
-    "slug": "fitbody-ai",
+    "name": "FitBody IA",
+    "slug": "fitbody-ia",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -13,7 +13,6 @@
       "bundleIdentifier": "com.anonymous.fit-pantry",
       "infoPlist": {
         "NSCameraUsageDescription": "Precisamos de acesso à câmera para reconhecer ingredientes",
-        "NSMicrophoneUsageDescription": "Precisamos de acesso ao microfone para gravar ingredientes por voz",
         "NSPhotoLibraryUsageDescription": "Precisamos de acesso à galeria para escolher fotos de ingredientes"
       }
     },
@@ -28,10 +27,10 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "CAMERA",
-        "RECORD_AUDIO",
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE"
-      ]
+      ],
+      "package": "com.anonymous.fitpantry"
     },
     "web": {
       "output": "static",

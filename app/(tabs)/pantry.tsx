@@ -1,7 +1,7 @@
-import { generateRecipeFromIngredients, IngredientParsed, normalizeIngredients, recognizeIngredientsFromImage, transcribeAudioToIngredients } from '@/lib/openai';
+import { generateRecipeFromIngredients, IngredientParsed, normalizeIngredients, recognizeIngredientsFromImage } from '@/lib/openai';
 import { supabase } from '@/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
+
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
@@ -42,9 +42,7 @@ export default function PantryScreen() {
     const [isCategorizing, setIsCategorizing] = useState(false);
 
     // Audio State
-    const [recording, setRecording] = useState<Audio.Recording | undefined>(undefined);
-    const [showAudioModal, setShowAudioModal] = useState(false);
-    const [isRecording, setIsRecording] = useState(false);
+
 
     const [processing, setProcessing] = useState(false);
     const [generatedRecipe, setGeneratedRecipe] = useState<any>(null);
@@ -219,70 +217,7 @@ export default function PantryScreen() {
 
     // --- AUDIO RECORDING ---
 
-    const handleAudioCapture = () => {
-        setShowCaptureMenu(false);
-        setShowAudioModal(true);
-    };
 
-    const startRecording = async () => {
-        try {
-            const permission = await Audio.requestPermissionsAsync();
-            if (permission.status !== 'granted') {
-                Alert.alert('Permissão negada', 'Precisamos de acesso ao microfone');
-                return;
-            }
-
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: true,
-                playsInSilentModeIOS: true,
-            });
-
-            const { recording } = await Audio.Recording.createAsync(
-                Audio.RecordingOptionsPresets.HIGH_QUALITY
-            );
-
-            setRecording(recording);
-            setIsRecording(true);
-        } catch (err) {
-            Alert.alert('Erro', 'Falha ao iniciar gravação');
-        }
-    };
-
-    const stopRecording = async () => {
-        if (!recording) return;
-
-        setIsRecording(false);
-        setRecording(undefined);
-        await recording.stopAndUnloadAsync();
-        const uri = recording.getURI();
-
-        if (uri) {
-            await processAudio(uri);
-        }
-    };
-
-    const processAudio = async (uri: string) => {
-        setShowAudioModal(false);
-        setProcessing(true);
-        try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
-
-            const ingredients = await transcribeAudioToIngredients({ userId: user.id, audioUri: uri });
-
-            if (!ingredients || ingredients.length === 0) {
-                Alert.alert('Ops!', 'Não consegui entender os ingredientes. Tente falar um pouco mais devagar.');
-                return;
-            }
-
-            await addIngredients(ingredients);
-            Alert.alert('Sucesso!', `${ingredients.length} ingredientes reconhecidos por voz!`);
-        } catch (error: any) {
-            Alert.alert('Erro', 'Não foi possível processar o áudio. Tente novamente.');
-        } finally {
-            setProcessing(false);
-        }
-    };
 
     // --- COMMON ---
 
@@ -662,12 +597,7 @@ export default function PantryScreen() {
                                 <Text style={styles.menuGridText}>Galeria</Text>
                             </TouchableOpacity>
 
-                            <TouchableOpacity style={styles.menuGridItem} onPress={handleAudioCapture}>
-                                <View style={[styles.menuIconContainer, { backgroundColor: '#fee2e2' }]}>
-                                    <Ionicons name="mic" size={28} color="#dc2626" />
-                                </View>
-                                <Text style={styles.menuGridText}>Áudio</Text>
-                            </TouchableOpacity>
+
 
                             <TouchableOpacity style={styles.menuGridItem} onPress={handleManualInput}>
                                 <View style={[styles.menuIconContainer, { backgroundColor: '#f3e8ff' }]}>
@@ -820,40 +750,7 @@ export default function PantryScreen() {
                 </View>
             </Modal>
 
-            {/* Audio Recording Modal */}
-            <Modal visible={showAudioModal} animationType="fade" transparent>
-                <View style={styles.modalOverlay}>
-                    <View style={styles.audioModalCard}>
-                        <Text style={styles.modalTitle}>Gravar Ingredientes</Text>
-                        <Text style={styles.modalSubtitle}>
-                            Fale os ingredientes que você tem em casa
-                        </Text>
 
-                        <View style={styles.micContainer}>
-                            <TouchableOpacity
-                                style={[styles.micButton, isRecording && styles.micButtonRecording]}
-                                onPress={isRecording ? stopRecording : startRecording}
-                            >
-                                <Ionicons
-                                    name={isRecording ? "stop" : "mic"}
-                                    size={40}
-                                    color="white"
-                                />
-                            </TouchableOpacity>
-                            <Text style={styles.recordingStatus}>
-                                {isRecording ? 'Gravando... Toque para parar' : 'Toque para gravar'}
-                            </Text>
-                        </View>
-
-                        <TouchableOpacity
-                            style={styles.cancelButton}
-                            onPress={() => setShowAudioModal(false)}
-                        >
-                            <Text style={styles.cancelButtonText}>Cancelar</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </Modal>
 
             {/* Recipe Modal */}
             <Modal visible={showRecipeModal} animationType="slide">

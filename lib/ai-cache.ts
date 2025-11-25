@@ -3,7 +3,7 @@
  * Gerencia cache de respostas da OpenAI no Supabase
  */
 
-import * as Crypto from 'expo-crypto';
+import { CryptoDigestAlgorithm, digestStringAsync } from 'expo-crypto';
 import { supabase } from './supabase';
 
 export interface CacheOptions {
@@ -29,8 +29,8 @@ export async function generateCacheKey(
     const input = `${type}:${normalized}`;
 
     // Gera hash SHA256
-    const hash = await Crypto.digestStringAsync(
-        Crypto.CryptoDigestAlgorithm.SHA256,
+    const hash = await digestStringAsync(
+        CryptoDigestAlgorithm.SHA256,
         input
     );
 

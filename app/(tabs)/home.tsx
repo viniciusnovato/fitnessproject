@@ -4,15 +4,16 @@ import { analyzeMealImage, analyzeMealWithContext, generateGoalInsights } from '
 import { supabase } from '@/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { router } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function HomeScreen() {
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [nutrition, setNutrition] = useState<any>(null);
 
   const [weightHistory, setWeightHistory] = useState<any[]>([]);
@@ -40,11 +41,10 @@ export default function HomeScreen() {
   const [planRecipes, setPlanRecipes] = useState<any[]>([]);
   const [loadingPlan, setLoadingPlan] = useState(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      checkUser();
-    }, [])
-  );
+  // Removed useFocusEffect to prevent infinite refresh loop
+  useEffect(() => {
+    checkUser();
+  }, []);
 
   useEffect(() => {
     if (user) {
@@ -103,6 +103,12 @@ export default function HomeScreen() {
     }
 
     setLoading(false);
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await checkUser();
+    setRefreshing(false);
   };
 
   const handleSignOut = async () => {
@@ -187,6 +193,7 @@ export default function HomeScreen() {
     }
 
     if (mode === 'text') {
+      setScannedMeal(null); // Reset previous meal data
       setCapturedImages([]);
       setUserDescription('');
       setMealTypes(new Set(['meal']));
@@ -199,23 +206,31 @@ export default function HomeScreen() {
   };
 
   const startCaptureFlow = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permissão necessária', 'Precisamos de acesso à câmera para analisar sua comida.');
-      return;
-    }
+    try {
+      // Reset previous meal data
+      setScannedMeal(null);
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.5,
-      base64: true,
-    });
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permissão necessária', 'Precisamos de acesso à câmera para analisar sua comida.');
+        return;
+      }
 
-    if (!result.canceled && result.assets[0].base64) {
-      // Add first image and open enhanced modal
-      setCapturedImages([result.assets[0].base64]);
-      setShowEnhancedModal(true);
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.5,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets[0].base64) {
+        // Add first image and open enhanced modal
+        setCapturedImages([result.assets[0].base64]);
+        setShowEnhancedModal(true);
+      }
+    } catch (error) {
+      console.error('Error opening camera:', error);
+      Alert.alert('Erro', 'Não foi possível abrir a câmera. Tente novamente.');
     }
   };
 
@@ -243,21 +258,26 @@ export default function HomeScreen() {
       return;
     }
 
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permissão necessária', 'Precisamos de acesso à câmera.');
-      return;
-    }
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permissão necessária', 'Precisamos de acesso à câmera.');
+        return;
+      }
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.5,
-      base64: true,
-    });
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.5,
+        base64: true,
+      });
 
-    if (!result.canceled && result.assets[0].base64) {
-      setCapturedImages([...capturedImages, result.assets[0].base64]);
+      if (!result.canceled && result.assets[0].base64) {
+        setCapturedImages([...capturedImages, result.assets[0].base64]);
+      }
+    } catch (error) {
+      console.error('Error adding photo:', error);
+      Alert.alert('Erro', 'Não foi possível abrir a câmera. Tente novamente.');
     }
   };
 
@@ -296,6 +316,31 @@ export default function HomeScreen() {
       });
 
       if (analysis && !analysis.error) {
+        // Calculate totals from items if main totals are zero or missing
+        if (analysis.items && analysis.items.length > 0) {
+          const itemTotals = analysis.items.reduce((sum: any, item: any) => ({
+            calories: sum.calories + (parseFloat(item.calories) || 0),
+            protein: sum.protein + (parseFloat(item.protein) || 0),
+            carbs: sum.carbs + (parseFloat(item.carbs) || 0),
+            fat: sum.fat + (parseFloat(item.fat) || 0),
+          }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+          // Use calculated totals if main totals are zero
+          if (!analysis.calories || analysis.calories === 0) {
+            analysis.calories = itemTotals.calories;
+          }
+          if (!analysis.protein || analysis.protein === 0) {
+            analysis.protein = itemTotals.protein;
+          }
+          if (!analysis.carbs || analysis.carbs === 0) {
+            analysis.carbs = itemTotals.carbs;
+          }
+          if (!analysis.fat || analysis.fat === 0) {
+            analysis.fat = itemTotals.fat;
+          }
+        }
+
+        console.log('Final analysis:', analysis); // Debug log
         setScannedMeal(analysis);
         setShowEnhancedModal(false);
         setShowCameraModal(true);
@@ -304,17 +349,38 @@ export default function HomeScreen() {
         setUserDescription('');
         setMealTypes(new Set(['meal']));
       } else {
+        // Error from AI
+        const errorMessage = analysis?.error || 'A IA não conseguiu identificar comida nesta imagem.';
         Alert.alert(
-          'Não consegui identificar',
-          analysis?.error || 'Tente tirar uma foto mais clara do prato ou adicione uma descrição do que você comeu.\n\nDica: Fotos da tabela nutricional ajudam muito na precisão!',
+          '❌ Não consegui analisar',
+          `${errorMessage}\n\n📸 Dicas para melhor precisão:\n\n✓ Tire foto clara e bem iluminada do prato\n✓ Se tiver embalagem, tire foto da TABELA NUTRICIONAL (garante 100% de precisão!)\n✓ Ou descreva manualmente: "Frango 200g, arroz 150g"`,
           [{ text: 'OK' }]
         );
       }
     } catch (error: any) {
       console.error('Erro na análise:', error);
+
+      // Specific error messages based on error type
+      let errorTitle = 'Erro na Análise';
+      let errorMessage = 'Houve um problema ao analisar a imagem.';
+
+      if (error.message?.includes('Network') || error.message?.includes('fetch')) {
+        errorTitle = '🌐 Sem Conexão';
+        errorMessage = 'Verifique sua conexão com a internet e tente novamente.';
+      } else if (error.message?.includes('API key')) {
+        errorTitle = '⚠️ Erro de Configuração';
+        errorMessage = 'Problema com a chave da API. Entre em contato com o suporte.';
+      } else if (error.message?.includes('Rate limit')) {
+        errorTitle = '⏳ Limite Atingido';
+        errorMessage = 'Muitas análises em pouco tempo. Aguarde 1 minuto e tente novamente.';
+      } else {
+        // Generic error
+        errorMessage = 'Tente novamente ou descreva manualmente o que você comeu.';
+      }
+
       Alert.alert(
-        'Erro na análise',
-        'Houve um problema ao analisar a imagem. Verifique sua conexão e tente novamente.\n\nSe o problema persistir, tente adicionar uma descrição do que você comeu.',
+        errorTitle,
+        errorMessage,
         [{ text: 'OK' }]
       );
     } finally {
@@ -424,7 +490,12 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
+      >
         {/* Header */}
         <View style={styles.header}>
           <View>
@@ -692,206 +763,222 @@ export default function HomeScreen() {
 
       {/* Enhanced Photo Capture Modal */}
       <Modal visible={showEnhancedModal} animationType="slide" transparent={true}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.enhancedModalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Registrar Refeição</Text>
-              <TouchableOpacity onPress={() => {
-                setShowEnhancedModal(false);
-                setCapturedImages([]);
-                setUserDescription('');
-                setMealTypes(new Set(['meal']));
-              }}>
-                <Ionicons name="close" size={24} color="#64748b" />
-              </TouchableOpacity>
-            </View>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.enhancedModalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Registrar Refeição</Text>
+                <TouchableOpacity onPress={() => {
+                  setShowEnhancedModal(false);
+                  setCapturedImages([]);
+                  setUserDescription('');
+                  setMealTypes(new Set(['meal']));
+                }}>
+                  <Ionicons name="close" size={24} color="#64748b" />
+                </TouchableOpacity>
+              </View>
 
-            <ScrollView style={styles.enhancedModalScroll}>
-              {/* Photos Section */}
-              <Text style={styles.sectionLabel}>Fotos {capturedImages.length > 0 && `(${capturedImages.length}/3)`}</Text>
-              <View style={styles.photosGrid}>
-                {capturedImages.map((img, index) => (
-                  <View key={index} style={styles.photoThumbnail}>
-                    <View style={styles.photoPlaceholder}>
-                      <Ionicons name="image" size={32} color="#22c55e" />
-                      <Text style={styles.photoLabel}>
-                        {index === 0 ? 'Prato Principal' : index === 1 ? 'Acompanhamentos/Rótulo' : 'Outro'}
-                      </Text>
+              <ScrollView style={styles.enhancedModalScroll}>
+                {/* Photos Section */}
+                <Text style={styles.sectionLabel}>Fotos {capturedImages.length > 0 && `(${capturedImages.length}/3)`}</Text>
+                <View style={styles.photosGrid}>
+                  {capturedImages.map((img, index) => (
+                    <View key={index} style={styles.photoThumbnail}>
+                      <View style={styles.photoPlaceholder}>
+                        <Ionicons name="image" size={32} color="#22c55e" />
+                        <Text style={styles.photoLabel}>
+                          {index === 0 ? 'Prato Principal' : index === 1 ? 'Acompanhamentos/Rótulo' : 'Outro'}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.removePhotoButton}
+                        onPress={() => handleRemovePhoto(index)}
+                      >
+                        <Ionicons name="close-circle" size={24} color="#ef4444" />
+                      </TouchableOpacity>
                     </View>
+                  ))}
+
+                  {capturedImages.length < 3 && (
                     <TouchableOpacity
-                      style={styles.removePhotoButton}
-                      onPress={() => handleRemovePhoto(index)}
+                      style={styles.addPhotoButton}
+                      onPress={handleAddPhoto}
                     >
-                      <Ionicons name="close-circle" size={24} color="#ef4444" />
+                      <Ionicons name="add-circle" size={32} color="#22c55e" />
+                      <Text style={styles.addPhotoText}>Adicionar</Text>
                     </TouchableOpacity>
-                  </View>
-                ))}
+                  )}
+                </View>
 
-                {capturedImages.length < 3 && (
+                {/* Description Section */}
+                <Text style={styles.sectionLabel}>Descrição (opcional)</Text>
+                <TextInput
+                  style={styles.descriptionInput}
+                  placeholder="Ex: Frango grelhado 200g, arroz integral 150g, Whey protein 30g..."
+                  placeholderTextColor="#9ca3af"
+                  value={userDescription}
+                  onChangeText={setUserDescription}
+                  multiline
+                  numberOfLines={3}
+                  maxLength={500}
+                />
+                <Text style={styles.charCounter}>{userDescription.length}/500</Text>
+
+                {/* Meal Type Section */}
+                <Text style={styles.sectionLabel}>Tipo</Text>
+                <View style={styles.typeChipsContainer}>
                   <TouchableOpacity
-                    style={styles.addPhotoButton}
-                    onPress={handleAddPhoto}
+                    style={[
+                      styles.typeChip,
+                      mealTypes.has('meal') && styles.typeChipActive
+                    ]}
+                    onPress={() => toggleMealType('meal')}
                   >
-                    <Ionicons name="add-circle" size={32} color="#22c55e" />
-                    <Text style={styles.addPhotoText}>Adicionar</Text>
+                    <Text style={[
+                      styles.typeChipText,
+                      mealTypes.has('meal') && styles.typeChipTextActive
+                    ]}>
+                      🍽️ Refeição
+                    </Text>
                   </TouchableOpacity>
-                )}
-              </View>
 
-              {/* Description Section */}
-              <Text style={styles.sectionLabel}>Descrição (opcional)</Text>
-              <TextInput
-                style={styles.descriptionInput}
-                placeholder="Ex: Frango grelhado 200g, arroz integral 150g, Whey protein 30g..."
-                placeholderTextColor="#9ca3af"
-                value={userDescription}
-                onChangeText={setUserDescription}
-                multiline
-                numberOfLines={3}
-                maxLength={500}
-              />
-              <Text style={styles.charCounter}>{userDescription.length}/500</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.typeChip,
+                      mealTypes.has('drink') && styles.typeChipActive
+                    ]}
+                    onPress={() => toggleMealType('drink')}
+                  >
+                    <Text style={[
+                      styles.typeChipText,
+                      mealTypes.has('drink') && styles.typeChipTextActive
+                    ]}>
+                      🥤 Bebida
+                    </Text>
+                  </TouchableOpacity>
 
-              {/* Meal Type Section */}
-              <Text style={styles.sectionLabel}>Tipo</Text>
-              <View style={styles.typeChipsContainer}>
+                  <TouchableOpacity
+                    style={[
+                      styles.typeChip,
+                      mealTypes.has('supplement') && styles.typeChipActive
+                    ]}
+                    onPress={() => toggleMealType('supplement')}
+                  >
+                    <Text style={[
+                      styles.typeChipText,
+                      mealTypes.has('supplement') && styles.typeChipTextActive
+                    ]}>
+                      💊 Suplemento
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Analyze Button */}
                 <TouchableOpacity
                   style={[
-                    styles.typeChip,
-                    mealTypes.has('meal') && styles.typeChipActive
+                    styles.analyzeButton,
+                    (analyzing || (capturedImages.length === 0 && !userDescription.trim())) && styles.analyzeButtonDisabled
                   ]}
-                  onPress={() => toggleMealType('meal')}
+                  onPress={analyzeWithContext}
+                  disabled={analyzing || (capturedImages.length === 0 && !userDescription.trim())}
                 >
-                  <Text style={[
-                    styles.typeChipText,
-                    mealTypes.has('meal') && styles.typeChipTextActive
-                  ]}>
-                    🍽️ Refeição
-                  </Text>
+                  {analyzing ? (
+                    <ActivityIndicator color="white" />
+                  ) : (
+                    <>
+                      <Ionicons name="sparkles" size={20} color="white" />
+                      <Text style={styles.analyzeButtonText}>Analisar com IA</Text>
+                    </>
+                  )}
                 </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.typeChip,
-                    mealTypes.has('drink') && styles.typeChipActive
-                  ]}
-                  onPress={() => toggleMealType('drink')}
-                >
-                  <Text style={[
-                    styles.typeChipText,
-                    mealTypes.has('drink') && styles.typeChipTextActive
-                  ]}>
-                    🥤 Bebida
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.typeChip,
-                    mealTypes.has('supplement') && styles.typeChipActive
-                  ]}
-                  onPress={() => toggleMealType('supplement')}
-                >
-                  <Text style={[
-                    styles.typeChipText,
-                    mealTypes.has('supplement') && styles.typeChipTextActive
-                  ]}>
-                    💊 Suplemento
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Analyze Button */}
-              <TouchableOpacity
-                style={[styles.analyzeButton, analyzing && styles.analyzeButtonDisabled]}
-                onPress={analyzeWithContext}
-                disabled={analyzing || capturedImages.length === 0}
-              >
-                {analyzing ? (
-                  <ActivityIndicator color="white" />
-                ) : (
-                  <>
-                    <Ionicons name="sparkles" size={20} color="white" />
-                    <Text style={styles.analyzeButtonText}>Analisar com IA</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </ScrollView>
+              </ScrollView>
+            </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Camera Confirmation Modal */}
       <Modal visible={showCameraModal} animationType="slide" transparent={true}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Confirmar Refeição</Text>
-              <TouchableOpacity onPress={() => setShowCameraModal(false)}>
-                <Ionicons name="close" size={24} color="#64748b" />
-              </TouchableOpacity>
-            </View>
-
-            {scannedMeal && (
-              <ScrollView>
-                <View style={styles.aiResultBox}>
-                  <Text style={styles.aiLabel}>IA Identificou:</Text>
-                  <TextInput
-                    style={styles.mealNameInput}
-                    value={scannedMeal.name}
-                    onChangeText={(t) => setScannedMeal({ ...scannedMeal, name: t })}
-                  />
-                </View>
-
-                <View style={styles.macrosInputGrid}>
-                  <View style={styles.macroInputItem}>
-                    <Text style={styles.macroInputLabel}>Calorias</Text>
-                    <TextInput
-                      style={styles.macroInput}
-                      value={scannedMeal.calories?.toString()}
-                      onChangeText={(t) => setScannedMeal({ ...scannedMeal, calories: parseInt(t) || 0 })}
-                      keyboardType="numeric"
-                    />
-                  </View>
-                  <View style={styles.macroInputItem}>
-                    <Text style={styles.macroInputLabel}>Prot (g)</Text>
-                    <TextInput
-                      style={styles.macroInput}
-                      value={scannedMeal.protein?.toString()}
-                      onChangeText={(t) => setScannedMeal({ ...scannedMeal, protein: parseFloat(t) || 0 })}
-                      keyboardType="numeric"
-                    />
-                  </View>
-                  <View style={styles.macroInputItem}>
-                    <Text style={styles.macroInputLabel}>Carb (g)</Text>
-                    <TextInput
-                      style={styles.macroInput}
-                      value={scannedMeal.carbs?.toString()}
-                      onChangeText={(t) => setScannedMeal({ ...scannedMeal, carbs: parseFloat(t) || 0 })}
-                      keyboardType="numeric"
-                    />
-                  </View>
-                  <View style={styles.macroInputItem}>
-                    <Text style={styles.macroInputLabel}>Gord (g)</Text>
-                    <TextInput
-                      style={styles.macroInput}
-                      value={scannedMeal.fat?.toString()}
-                      onChangeText={(t) => setScannedMeal({ ...scannedMeal, fat: parseFloat(t) || 0 })}
-                      keyboardType="numeric"
-                    />
-                  </View>
-                </View>
-
-                <TouchableOpacity
-                  style={styles.confirmButton}
-                  onPress={() => saveMeal(scannedMeal)}
-                >
-                  <Text style={styles.confirmButtonText}>Confirmar e Salvar</Text>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Confirmar Refeição</Text>
+                <TouchableOpacity onPress={() => {
+                  setShowCameraModal(false);
+                  setScannedMeal(null); // Clear meal data when closing
+                }}>
+                  <Ionicons name="close" size={24} color="#64748b" />
                 </TouchableOpacity>
-              </ScrollView>
-            )}
+              </View>
+
+              {scannedMeal && (
+                <ScrollView>
+                  <View style={styles.aiResultBox}>
+                    <Text style={styles.aiLabel}>IA Identificou:</Text>
+                    <TextInput
+                      style={styles.mealNameInput}
+                      value={scannedMeal.name}
+                      onChangeText={(t) => setScannedMeal({ ...scannedMeal, name: t })}
+                    />
+                  </View>
+
+                  <View style={styles.macrosInputGrid}>
+                    <View style={styles.macroInputItem}>
+                      <Text style={styles.macroInputLabel}>Calorias</Text>
+                      <TextInput
+                        style={styles.macroInput}
+                        value={scannedMeal.calories?.toString()}
+                        onChangeText={(t) => setScannedMeal({ ...scannedMeal, calories: parseInt(t) || 0 })}
+                        keyboardType="numeric"
+                      />
+                    </View>
+                    <View style={styles.macroInputItem}>
+                      <Text style={styles.macroInputLabel}>Prot (g)</Text>
+                      <TextInput
+                        style={styles.macroInput}
+                        value={scannedMeal.protein?.toString()}
+                        onChangeText={(t) => setScannedMeal({ ...scannedMeal, protein: parseFloat(t) || 0 })}
+                        keyboardType="numeric"
+                      />
+                    </View>
+                    <View style={styles.macroInputItem}>
+                      <Text style={styles.macroInputLabel}>Carb (g)</Text>
+                      <TextInput
+                        style={styles.macroInput}
+                        value={scannedMeal.carbs?.toString()}
+                        onChangeText={(t) => setScannedMeal({ ...scannedMeal, carbs: parseFloat(t) || 0 })}
+                        keyboardType="numeric"
+                      />
+                    </View>
+                    <View style={styles.macroInputItem}>
+                      <Text style={styles.macroInputLabel}>Gord (g)</Text>
+                      <TextInput
+                        style={styles.macroInput}
+                        value={scannedMeal.fat?.toString()}
+                        onChangeText={(t) => setScannedMeal({ ...scannedMeal, fat: parseFloat(t) || 0 })}
+                        keyboardType="numeric"
+                      />
+                    </View>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.confirmButton}
+                    onPress={() => saveMeal(scannedMeal)}
+                  >
+                    <Text style={styles.confirmButtonText}>Confirmar e Salvar</Text>
+                  </TouchableOpacity>
+                </ScrollView>
+              )}
+            </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Plan Selection Modal */}
@@ -1541,6 +1628,19 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+  clearCacheButton: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    marginBottom: 16,
+  },
+  clearCacheText: {
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '500',
   },
   // Help Modal Styles
   helpModalContent: {

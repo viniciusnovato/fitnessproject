@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FitBody IA - Validações IA</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1>💪 FitBody IA Admin</h1>
+                <p class="subtitle">Painel de Administração</p>
+            </div>
+            <div class="header-nav">
+                <a href="index.html" class="nav-link">Dashboard</a>
+                <a href="validations.html" class="nav-link active">Validações IA</a>
+            </div>
+            <div class="refresh-btn" onclick="refreshValidations()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+                </svg>
+                Atualizar
+            </div>
+        </header>
+
+        <!-- Filter Stats -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">📸</div>
+                <div class="stat-content">
+                    <h3 id="total-analyses">-</h3>
+                    <p>Total de Análises</p>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">✅</div>
+                <div class="stat-content">
+                    <h3 id="approved-count">-</h3>
+                    <p>Aprovadas</p>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">❌</div>
+                <div class="stat-content">
+                    <h3 id="rejected-count">-</h3>
+                    <p>Reprovadas</p>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">⏳</div>
+                <div class="stat-content">
+                    <h3 id="pending-count">-</h3>
+                    <p>Pendentes</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="section">
+            <div class="filters">
+                <button class="filter-btn active" onclick="filterAnalyses('all')">Todos</button>
+                <button class="filter-btn" onclick="filterAnalyses('pending')">Pendentes</button>
+                <button class="filter-btn" onclick="filterAnalyses('approved')">Aprovados</button>
+                <button class="filter-btn" onclick="filterAnalyses('rejected')">Reprovados</button>
+            </div>
+        </div>
+
+        <!-- Analyses Grid -->
+        <div id="analyses-container" class="analyses-grid">
+            <div class="loading-card">Carregando análises...</div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>FitBody IA Admin Dashboard • Sistema de Validação para Fine-tuning</p>
+        </footer>
+    </div>
+
+    <script src="validations.js"></script>
+</body>
+
+</html>

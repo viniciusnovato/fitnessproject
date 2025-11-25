@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FitBody IA - Admin Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1>💪 FitBody IA Admin</h1>
+                <p class="subtitle">Painel de Administração</p>
+            </div>
+            <div class="header-nav">
+                <a href="index.html" class="nav-link active">Dashboard</a>
+                <a href="validations.html" class="nav-link">Validações IA</a>
+            </div>
+            <div class="refresh-btn" onclick="refreshData()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+                </svg>
+                Atualizar
+            </div>
+        </header>
+
+        <!-- Stats Cards -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">👥</div>
+                <div class="stat-content">
+                    <h3 id="total-users">-</h3>
+                    <p>Usuários Totais</p>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">🍽️</div>
+                <div class="stat-content">
+                    <h3 id="total-meals">-</h3>
+                    <p>Refeições Registradas</p>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">📖</div>
+                <div class="stat-content">
+                    <h3 id="total-recipes">-</h3>
+                    <p>Receitas Geradas</p>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">🧾</div>
+                <div class="stat-content">
+                    <h3 id="total-ingredients">-</h3>
+                    <p>Ingredientes Cadastrados</p>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">🤖</div>
+                <div class="stat-content">
+                    <h3 id="ai-cache-count">-</h3>
+                    <p>Respostas em Cache</p>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">📅</div>
+                <div class="stat-content">
+                    <h3 id="meal-plans-count">-</h3>
+                    <p>Planos Alimentares</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Users -->
+        <div class="section">
+            <h2>👤 Últimos Usuários Cadastrados</h2>
+            <div class="table-container">
+                <table id="users-table">
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Data de Cadastro</th>
+                            <th>Objetivo</th>
+                            <th>Calorias/dia</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-tbody">
+                        <tr>
+                            <td colspan="4" class="loading">Carregando...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="section">
+            <h2>⚡ Últimas Refeições Registradas</h2>
+            <div class="table-container">
+                <table id="meals-table">
+                    <thead>
+                        <tr>
+                            <th>Usuário</th>
+                            <th>Refeição</th>
+                            <th>Calorias</th>
+                            <th>Proteínas</th>
+                            <th>Data</th>
+                        </tr>
+                    </thead>
+                    <tbody id="meals-tbody">
+                        <tr>
+                            <td colspan="5" class="loading">Carregando...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- AI Cache Stats -->
+        <div class="section">
+            <h2>🧠 Cache da IA</h2>
+            <div class="table-container">
+                <table id="cache-table">
+                    <thead>
+                        <tr>
+                            <th>Tipo</th>
+                            <th>Quantidade</th>
+                            <th>Taxa de Hit</th>
+                            <th>Último Uso</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cache-tbody">
+                        <tr>
+                            <td colspan="4" class="loading">Carregando...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>FitPantry Admin Dashboard • Última atualização: <span id="last-update">-</span></p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
